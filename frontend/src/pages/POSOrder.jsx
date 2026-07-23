@@ -4,10 +4,11 @@ import AppShell from "@/components/AppShell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
-import { Minus, Plus, Send, Trash2, ShoppingBag, CircleCheck, PlusCircle } from "lucide-react";
+import { Minus, Plus, Send, Trash2, ShoppingBag, CircleCheck, PlusCircle, Menu, Search, ChevronRight } from "lucide-react";
 import { useOrdersWS } from "@/lib/ws";
 
 export default function POSOrder() {
@@ -22,6 +23,8 @@ export default function POSOrder() {
   const [modDlg, setModDlg] = useState(null);
   const [note, setNote] = useState("");
   const [deleteConfirm, setDeleteConfirm] = useState(null); // {idx, name}
+  const [search, setSearch] = useState("");
+  const [catSheetOpen, setCatSheetOpen] = useState(false);
 
   const loadAll = async () => {
     const [c, p, m, t] = await Promise.all([api.get("/categories"), api.get("/products"), api.get("/modifiers"), api.get("/tables")]);
@@ -49,7 +52,12 @@ export default function POSOrder() {
   });
 
   const modMap = useMemo(() => Object.fromEntries(mods.map(m=>[m.id,m])), [mods]);
-  const filtered = products.filter(p => p.available && (!activeCat || p.category_id === activeCat));
+  const filtered = products.filter(p => {
+    if (!p.available) return false;
+    if (search.trim()) return p.name.toLowerCase().includes(search.trim().toLowerCase());
+    return !activeCat || p.category_id === activeCat;
+  });
+  const activeCatName = cats.find(c=>c.id===activeCat)?.name || "Categorías";
 
   const addToCart = (p) => {
     if (p.modifier_ids && p.modifier_ids.length) {
@@ -269,13 +277,26 @@ export default function POSOrder() {
         {/* Tab Productos */}
         {mobileTab==="productos" && (
           <div className="p-3 overflow-y-auto h-full">
-            <div className="flex gap-2 overflow-x-auto pb-2 mb-3 scrollbar-hide">
-              {cats.map(c => (
-                <button key={c.id} onClick={()=>setActiveCat(c.id)}
-                  className={`flex-shrink-0 h-9 rounded-full px-4 text-sm font-semibold transition-all ${activeCat===c.id?"bg-[#D45D3C] text-white":"bg-white border border-[#E5E0D8]"}`}>
-                  {c.name}
-                </button>
-              ))}
+            <div className="flex items-center gap-2 mb-3">
+              <button onClick={()=>setCatSheetOpen(true)} data-testid="open-categories-btn"
+                className="flex-shrink-0 h-11 w-11 rounded-xl bg-white border border-[#E5E0D8] flex items-center justify-center active:scale-95 transition-transform">
+                <Menu className="h-5 w-5 text-[#2C2C2C]"/>
+              </button>
+              <button onClick={()=>setCatSheetOpen(true)}
+                className="flex-1 h-11 rounded-xl bg-white border border-[#E5E0D8] px-4 flex items-center justify-between font-semibold text-sm">
+                <span className="truncate">{search.trim() ? "Todos los productos" : activeCatName}</span>
+                <ChevronRight className="h-4 w-4 text-[#8A8A8A] flex-shrink-0"/>
+              </button>
+            </div>
+            <div className="relative mb-3">
+              <Search className="h-4 w-4 text-[#8A8A8A] absolute left-3 top-1/2 -translate-y-1/2"/>
+              <Input
+                value={search}
+                onChange={e=>setSearch(e.target.value)}
+                placeholder="Buscar producto por nombre..."
+                className="h-11 rounded-xl pl-9"
+                data-testid="product-search-input"
+              />
             </div>
             <div className="grid grid-cols-2 gap-3" data-testid="products-grid">
               {filtered.map(p => (
@@ -288,10 +309,31 @@ export default function POSOrder() {
                   <div className="mt-1 font-bold text-[#D45D3C] text-sm">S/ {p.price.toFixed(2)}</div>
                 </button>
               ))}
-              {filtered.length===0 && <div className="col-span-2 text-center text-[#8A8A8A] py-12">Sin productos</div>}
+              {filtered.length===0 && (
+                <div className="col-span-2 text-center text-[#8A8A8A] py-12">
+                  {search.trim() ? "Sin resultados para tu búsqueda" : "Sin productos"}
+                </div>
+              )}
             </div>
           </div>
         )}
+
+        {/* Panel lateral de categorías (móvil) */}
+        <Sheet open={catSheetOpen} onOpenChange={setCatSheetOpen}>
+          <SheetContent side="left" className="w-4/5 max-w-xs p-0 flex flex-col">
+            <SheetHeader className="p-4 border-b border-[#E5E0D8] text-left">
+              <SheetTitle>Tipos de menú</SheetTitle>
+            </SheetHeader>
+            <div className="p-3 overflow-y-auto flex-1 space-y-2">
+              {cats.map(c => (
+                <button key={c.id} onClick={()=>{ setActiveCat(c.id); setSearch(""); setCatSheetOpen(false); }}
+                  className={`w-full text-left h-14 rounded-xl px-4 font-semibold transition-all ${activeCat===c.id && !search.trim() ?"bg-[#D45D3C] text-white shadow-md":"bg-white border border-[#E5E0D8]"}`}>
+                  {c.name}
+                </button>
+              ))}
+            </div>
+          </SheetContent>
+        </Sheet>
 
         {/* Tab Pedido */}
         {mobileTab==="pedido" && (
