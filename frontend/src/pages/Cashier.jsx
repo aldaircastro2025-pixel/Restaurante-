@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import { Banknote, Printer, Trash2, Split, CreditCard, CheckCircle2 } from "lucide-react";
@@ -21,6 +22,7 @@ export default function Cashier() {
   const [payDlgOpen, setPayDlgOpen] = useState(false);
   const [payMode, setPayMode] = useState("full"); // "full" or "partial"
   const [tipPercent, setTipPercent] = useState(0); // 0 = no tip, or 10/15/20 preset, or -1 = custom
+  const [cancelConfirm, setCancelConfirm] = useState(false);
 
   const load = async () => {
     const { data } = await api.get("/orders?paid=false");
@@ -138,6 +140,18 @@ export default function Cashier() {
     } catch (e) { toast.error(e?.response?.data?.detail || "Error al cobrar"); }
   };
 
+  const cancelOrder = async () => {
+    if (!sel) return;
+    try {
+      await api.delete(`/orders/${sel.id}`);
+      toast.success("Pedido anulado");
+      setCancelConfirm(false);
+      setSel(null);
+      setMobileView("orders");
+      setOrders(prev => prev.filter(o => o.id !== sel.id));
+    } catch (e) { toast.error(e?.response?.data?.detail || "No se pudo anular el pedido"); }
+  };
+
   const statusBadge = (s) => ({
     pending: { bg: "bg-[#FFF3CD]", text: "text-[#856404]", label: "Pendiente" },
     preparing: { bg: "bg-[#FFE5D0]", text: "text-[#C85A17]", label: "Preparación" },
@@ -202,7 +216,10 @@ export default function Cashier() {
                     <div className="heading font-bold text-2xl">{sel.table_number ? `Mesa ${sel.table_number}` : "Para llevar"}</div>
                   </div>
                 </div>
-                <Button variant="outline" onClick={() => window.open(`${API}/orders/${sel.id}/ticket`, "_blank")} data-testid="print-pre-ticket" className="rounded-xl h-11"><Printer className="h-4 w-4 mr-2" />Pre-cuenta</Button>
+                <div className="flex items-center gap-2">
+                  <Button variant="outline" onClick={() => window.open(`${API}/orders/${sel.id}/ticket`, "_blank")} data-testid="print-pre-ticket" className="rounded-xl h-11"><Printer className="h-4 w-4 mr-2" />Pre-cuenta</Button>
+                  <Button variant="outline" onClick={() => setCancelConfirm(true)} data-testid="cancel-order-btn" className="rounded-xl h-11 text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700"><Trash2 className="h-4 w-4 mr-2" />Anular</Button>
+                </div>
               </div>
               <div className="flex-1 overflow-y-auto p-4">
                 {/* Pending items with checkboxes (split bill) */}
@@ -373,6 +390,22 @@ export default function Cashier() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Confirmación anular pedido completo */}
+      <AlertDialog open={cancelConfirm} onOpenChange={setCancelConfirm}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>¿Anular este pedido?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Se eliminará por completo <strong>{sel?.code}</strong> ({sel?.table_number ? `Mesa ${sel.table_number}` : "Para llevar"}) y no se podrá recuperar. Esta acción no se puede deshacer.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>No, mantener pedido</AlertDialogCancel>
+            <AlertDialogAction onClick={cancelOrder} data-testid="confirm-cancel-order-btn" className="bg-red-600 hover:bg-red-700">Sí, anular</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </AppShell>
   );
 }
