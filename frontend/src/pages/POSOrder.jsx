@@ -25,6 +25,8 @@ export default function POSOrder() {
   const [deleteConfirm, setDeleteConfirm] = useState(null); // {idx, name}
   const [search, setSearch] = useState("");
   const [catSheetOpen, setCatSheetOpen] = useState(false);
+  const [takeawayList, setTakeawayList] = useState([]);
+  const [takeawaySheetOpen, setTakeawaySheetOpen] = useState(false);
 
   const loadAll = async () => {
     const [c, p, m, t] = await Promise.all([api.get("/categories"), api.get("/products"), api.get("/modifiers"), api.get("/tables")]);
@@ -100,6 +102,22 @@ export default function POSOrder() {
   const lineTotal = (c) => (c.product.price + c.modifier_ids.reduce((s,mid)=>s + (modMap[mid]?.price_delta||0),0)) * c.qty;
   const total = cart.reduce((s,c)=>s+lineTotal(c),0);
 
+  const loadOrderIntoCart = (o, prodList) => {
+    if (o.paid) return false;
+    setOrderId(o.id);
+    setNote(o.note || "");
+    setCart(o.items.map(it => ({
+      uid: crypto.randomUUID(),
+      product: prodList.find(p=>p.id===it.product_id) || { id: it.product_id, name: it.name, price: it.unit_price, modifier_ids: [] },
+      qty: it.qty,
+      modifier_ids: it.modifiers.map(m=>m.id),
+      notes: it.notes || "",
+      _existing: true,
+      _added: false,
+    })));
+    return true;
+  };
+
   const selectTable = async (n, overrideData = {}) => {
     setTable(n); setCart([]); setOrderId(null); setNote("");
     // Usar datos frescos si se pasan (evita bug de timing con estado de React)
@@ -109,20 +127,39 @@ export default function POSOrder() {
     if (existing) {
       try {
         const o = (await api.get(`/orders/${existing.order_id}`)).data;
-        if (o.paid) return;
-        setOrderId(o.id);
-        setNote(o.note || "");
-        setCart(o.items.map(it => ({
-          uid: crypto.randomUUID(),
-          product: prodList.find(p=>p.id===it.product_id) || { id: it.product_id, name: it.name, price: it.unit_price, modifier_ids: [] },
-          qty: it.qty,
-          modifier_ids: it.modifiers.map(m=>m.id),
-          notes: it.notes || "",
-          _existing: true,
-          _added: false,
-        })));
+        loadOrderIntoCart(o, prodList);
       } catch (err) { console.error("No se pudo cargar pedido existente:", err); }
     }
+  };
+
+  // "Para llevar" no tiene número de mesa, así que puede haber varios pedidos
+  // abiertos a la vez. Antes de abrir uno nuevo, revisamos si ya hay pedidos
+  // para llevar pendientes y dejamos elegir cuál editar.
+  const openTakeaway = async () => {
+    try {
+      const { data } = await api.get("/orders", { params: { status: "pending,preparing,ready", paid: false } });
+      const open = data.filter(o => o.table_number === null || o.table_number === undefined);
+      if (open.length === 0) {
+        startNewTakeaway();
+      } else {
+        setTakeawayList(open);
+        setTakeawaySheetOpen(true);
+      }
+    } catch (err) {
+      console.error("No se pudo cargar pedidos para llevar:", err);
+      startNewTakeaway();
+    }
+  };
+
+  const startNewTakeaway = () => {
+    setTable(null); setCart([]); setOrderId(null); setNote("");
+    setTakeawaySheetOpen(false);
+  };
+
+  const selectTakeawayOrder = (o) => {
+    setTable(null);
+    loadOrderIntoCart(o, products);
+    setTakeawaySheetOpen(false);
   };
 
   const send = async () => {
@@ -259,7 +296,7 @@ export default function POSOrder() {
             ))}
             <div className="text-xs uppercase tracking-[0.2em] text-[#8A8A8A] font-bold px-1 mt-4">Mesas</div>
             <div className="grid grid-cols-4 gap-2">
-              <button onClick={()=>{ selectTable(null); setMobileTab("productos"); }}
+              <button onClick={()=>{ openTakeaway(); setMobileTab("productos"); }}
                 className={`h-14 rounded-xl text-xs font-bold flex flex-col items-center justify-center ${table===null?"bg-[#2C2C2C] text-white":"bg-white border border-[#E5E0D8]"}`}>
                 <ShoppingBag className="h-4 w-4 mb-0.5"/>LLEVAR
               </button>
@@ -355,7 +392,7 @@ export default function POSOrder() {
           ))}
           <div className="text-xs uppercase tracking-[0.2em] text-[#8A8A8A] font-bold mt-6 mb-2 px-1">Mesas</div>
           <div className="grid grid-cols-3 gap-2">
-            <button onClick={()=>selectTable(null)} data-testid="table-takeaway"
+            <button onClick={openTakeaway} data-testid="table-takeaway"
               className={`h-14 rounded-xl text-xs font-bold flex flex-col items-center justify-center ${table===null?"bg-[#2C2C2C] text-white":"bg-white border border-[#E5E0D8]"}`}>
               <ShoppingBag className="h-4 w-4 mb-0.5"/>LLEVAR
             </button>
@@ -459,6 +496,30 @@ export default function POSOrder() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      {/* Panel: elegir pedido "Para llevar" a editar, o crear uno nuevo */}
+      <Sheet open={takeawaySheetOpen} onOpenChange={setTakeawaySheetOpen}>
+        <SheetContent side="bottom" className="p-0 flex flex-col max-h-[80vh]">
+          <SheetHeader className="p-4 border-b border-[#E5E0D8] text-left">
+            <SheetTitle>Pedidos para llevar</SheetTitle>
+          </SheetHeader>
+          <div className="p-3 overflow-y-auto flex-1 space-y-2">
+            <button onClick={startNewTakeaway}
+              className="w-full text-left h-14 rounded-xl px-4 font-semibold bg-[#2C2C2C] text-white flex items-center gap-2">
+              <PlusCircle className="h-4 w-4"/> Nuevo pedido para llevar
+            </button>
+            {takeawayList.map(o => (
+              <button key={o.id} onClick={()=>selectTakeawayOrder(o)}
+                className="w-full text-left rounded-xl px-4 py-3 bg-white border border-[#E5E0D8] hover:border-[#D45D3C] flex items-center justify-between">
+                <div>
+                  <div className="font-bold">{o.code}</div>
+                  <div className="text-xs text-[#8A8A8A]">{o.items.length} producto{o.items.length!==1?"s":""}</div>
+                </div>
+                <span className="font-bold text-[#D45D3C]">S/ {o.total.toFixed(2)}</span>
+              </button>
+            ))}
+          </div>
+        </SheetContent>
+      </Sheet>
     </AppShell>
   );
 }
