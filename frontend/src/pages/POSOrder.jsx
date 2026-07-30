@@ -369,6 +369,16 @@ export default function POSOrder() {
           </div>
         </aside>
         <section className="col-span-7 overflow-y-auto">
+          <div className="relative mb-4">
+            <Search className="h-4 w-4 text-[#8A8A8A] absolute left-3 top-1/2 -translate-y-1/2"/>
+            <Input
+              value={search}
+              onChange={e=>setSearch(e.target.value)}
+              placeholder="Buscar producto por nombre..."
+              className="h-11 rounded-xl pl-9 max-w-sm"
+              data-testid="product-search-input-desktop"
+            />
+          </div>
           <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4 content-start" data-testid="products-grid">
             {filtered.map(p => (
               <button key={p.id} onClick={()=>addToCart(p)} data-testid={`product-${p.id}`}
@@ -383,7 +393,11 @@ export default function POSOrder() {
                 </div>
               </button>
             ))}
-            {filtered.length===0 && <div className="col-span-4 text-center text-[#8A8A8A] py-12">Sin productos en esta categoría</div>}
+            {filtered.length===0 && (
+              <div className="col-span-4 text-center text-[#8A8A8A] py-12">
+                {search.trim() ? "Sin resultados para tu búsqueda" : "Sin productos en esta categoría"}
+              </div>
+            )}
           </div>
         </section>
         <aside className="col-span-3 card-surface flex flex-col overflow-hidden">
