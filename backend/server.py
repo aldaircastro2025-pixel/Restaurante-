@@ -463,7 +463,7 @@ async def close_order(oid: str, body: CloseIn, user=Depends(require_roles("cashi
     return o2
 
 @api.delete("/orders/{oid}")
-async def cancel_order(oid: str, user=Depends(require_roles("waiter", "cashier"))):
+async def cancel_order(oid: str, user=Depends(require_roles("cashier"))):
     o = await db.orders.find_one({"id": oid})
     if not o:
         raise HTTPException(404, "Pedido no encontrado")
