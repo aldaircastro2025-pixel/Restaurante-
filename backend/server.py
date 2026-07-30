@@ -445,15 +445,26 @@ async def close_order(oid: str, body: CloseIn, user=Depends(require_roles("cashi
         raise HTTPException(404, "Pedido no encontrado")
     if o.get("paid"):
         raise HTTPException(400, "Pedido ya pagado")
-    total = round(o["subtotal"] - body.discount + body.extra_charge, 2)
+    # Solo se exige el monto de lo que falta por cobrar: los platos ya
+    # cobrados con "cobrar parcial" (item.paid == True) no se vuelven a sumar.
+    pending_subtotal = sum(it["line_total"] for it in o["items"] if not it.get("paid"))
+    total = round(pending_subtotal - body.discount + body.extra_charge, 2)
     paid_sum = round(sum(p.amount for p in body.payments), 2)
     if paid_sum + 0.01 < total:
         raise HTTPException(400, f"Monto pagado ({paid_sum}) menor al total ({total})")
+    # Marca como pagados los items pendientes que se están cobrando ahora.
+    items = o["items"]
+    for it in items:
+        it["paid"] = True
+    prior_payments = o.get("payments", [])
+    all_payments = prior_payments + [p.model_dump() for p in body.payments]
+    grand_total = round(sum(p["amount"] for p in all_payments), 2)
     upd = {
+        "items": items,
         "discount": body.discount,
         "extra_charge": body.extra_charge,
-        "total": total,
-        "payments": [p.model_dump() for p in body.payments],
+        "total": grand_total,
+        "payments": all_payments,
         "paid": True,
         "status": "closed",
         "closed_at": datetime.now(timezone.utc).isoformat(),
