@@ -21,7 +21,6 @@ export default function Cashier() {
   const [payments, setPayments] = useState([{ uid: crypto.randomUUID(), method: "efectivo", amount: 0, tip: 0 }]);
   const [payDlgOpen, setPayDlgOpen] = useState(false);
   const [payMode, setPayMode] = useState("full"); // "full" or "partial"
-  const [tipPercent, setTipPercent] = useState(0); // 0 = no tip, or 10/15/20 preset, or -1 = custom
   const [cancelConfirm, setCancelConfirm] = useState(false);
 
   const load = async () => {
@@ -90,17 +89,8 @@ export default function Cashier() {
   const openPartialPay = () => {
     if (!selectedItems.size) return toast.error("Selecciona al menos un plato para cobrar");
     setPayMode("partial");
-    setTipPercent(0);
     setPayments([{ uid: crypto.randomUUID(), method: "efectivo", amount: selectedSubtotal, tip: 0 }]);
     setPayDlgOpen(true);
-  };
-
-  const applyTipPreset = (pct) => {
-    setTipPercent(pct);
-    const tipAmt = pct > 0 ? +(totalToPay * pct / 100).toFixed(2) : 0;
-    setPayments(prev => prev.map((p, i) => i === 0
-      ? { ...p, tip: tipAmt, amount: +(totalToPay + tipAmt).toFixed(2) }
-      : p));
   };
 
   const confirmPay = async () => {
@@ -325,36 +315,12 @@ export default function Cashier() {
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-3">
-            {/* Tip presets */}
-            <div>
-              <div className="text-xs uppercase tracking-[0.2em] text-[#8A8A8A] font-bold mb-2">Propina sugerida</div>
-              <div className="grid grid-cols-5 gap-2">
-                {[
-                  { v: 0,  label: "Sin propina" },
-                  { v: 10, label: "10%" },
-                  { v: 15, label: "15%" },
-                  { v: 20, label: "20%" },
-                  { v: -1, label: "Otra" },
-                ].map(opt => (
-                  <button
-                    key={opt.v}
-                    type="button"
-                    onClick={() => opt.v === -1 ? setTipPercent(-1) : applyTipPreset(opt.v)}
-                    data-testid={`tip-preset-${opt.v}`}
-                    className={`h-11 rounded-xl font-semibold text-sm transition-all border-2 ${tipPercent === opt.v ? "border-[#D45D3C] bg-[#F3E8E0] text-[#D45D3C]" : "border-[#E5E0D8] hover:border-[#D45D3C]"}`}
-                  >
-                    {opt.label}
-                  </button>
-                ))}
+            {tipSum > 0 && (
+              <div className="text-xs text-[#5E5E5E] flex justify-between px-1">
+                <span>Subtotal: <b>S/ {totalToPay.toFixed(2)}</b></span>
+                <span>Propina: <b className="text-[#D45D3C]">S/ {tipSum.toFixed(2)}</b></span>
               </div>
-              {tipSum > 0 && (
-                <div className="text-xs text-[#5E5E5E] mt-2 flex justify-between px-1">
-                  <span>Subtotal: <b>S/ {totalToPay.toFixed(2)}</b></span>
-                  <span>Propina: <b className="text-[#D45D3C]">S/ {tipSum.toFixed(2)}</b></span>
-                </div>
-              )}
-            </div>
-
+            )}
             <div className="border-t border-[#E5E0D8] pt-1" />
             {payments.map((p, i) => (
               <div key={p.uid} className="grid grid-cols-12 gap-2 items-end">
