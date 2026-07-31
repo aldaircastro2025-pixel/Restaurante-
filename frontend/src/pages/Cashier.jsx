@@ -5,23 +5,29 @@ import { useOrdersWS } from "@/lib/ws";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
-import { Banknote, Printer, Trash2, Split, CreditCard, CheckCircle2 } from "lucide-react";
+import { Banknote, Printer, Trash2, Split, CreditCard, CheckCircle2, PlusCircle, Search, Plus } from "lucide-react";
 
 export default function Cashier() {
   const [orders, setOrders] = useState([]);
   const [sel, setSel] = useState(null);
   const [discount, setDiscount] = useState(0);
   const [extra, setExtra] = useState(0);
-  const [selectedItems, setSelectedItems] = useState(new Set());  // indexes selected for split bill
+  const [selectedQty, setSelectedQty] = useState({}); // { idx: unitsSelected } for split-by-quantity
+  const [qtyDlg, setQtyDlg] = useState(null); // { idx, value } mini dialog to type an exact quantity
   const [payments, setPayments] = useState([{ uid: crypto.randomUUID(), method: "efectivo", amount: 0, tip: 0 }]);
   const [payDlgOpen, setPayDlgOpen] = useState(false);
   const [payMode, setPayMode] = useState("full"); // "full" or "partial"
+  const [tipPercent, setTipPercent] = useState(0); // 0 = no tip, or 10/15/20 preset, or -1 = custom
   const [cancelConfirm, setCancelConfirm] = useState(false);
+  const [addItemOpen, setAddItemOpen] = useState(false); // panel de mozo: agregar producto/cargo al pedido
+  const [catalog, setCatalog] = useState({ cats: [], products: [] });
+  const [addItemCat, setAddItemCat] = useState(null);
+  const [addItemSearch, setAddItemSearch] = useState("");
+  const [addingProductId, setAddingProductId] = useState(null);
 
   const load = async () => {
     const { data } = await api.get("/orders?paid=false");
@@ -47,15 +53,22 @@ export default function Cashier() {
   const open = (o) => {
     setSel(o);
     setDiscount(0); setExtra(0);
-    setSelectedItems(new Set());
+    setSelectedQty({});
     setPayments([{ uid: crypto.randomUUID(), method: "efectivo", amount: 0, tip: 0 }]);
   };
 
-  // Items split into pending vs paid
-  const pendingItems = useMemo(() => sel ? sel.items.map((it, i) => ({ ...it, _idx: i })).filter(it => !it.paid) : [], [sel]);
-  const paidItems    = useMemo(() => sel ? sel.items.map((it, i) => ({ ...it, _idx: i })).filter(it => it.paid)  : [], [sel]);
-  const pendingSubtotal = pendingItems.reduce((s, it) => s + it.line_total, 0);
-  const selectedSubtotal = pendingItems.filter(it => selectedItems.has(it._idx)).reduce((s, it) => s + it.line_total, 0);
+  // Items pendientes (con unidades por cobrar > 0) y ya cobrados (con unidades pagadas > 0).
+  // Un mismo plato puede aparecer en ambas listas si solo parte de sus unidades fue pagada.
+  const pendingItems = useMemo(() => sel ? sel.items
+    .map((it, i) => ({ ...it, _idx: i, _pendingQty: it.qty - (it.paid_qty || 0) }))
+    .filter(it => it._pendingQty > 0) : [], [sel]);
+  const paidItems = useMemo(() => sel ? sel.items
+    .map((it, i) => ({ ...it, _idx: i }))
+    .filter(it => (it.paid_qty || 0) > 0) : [], [sel]);
+  const unitPrice = (it) => it.qty ? it.line_total / it.qty : 0;
+  const pendingSubtotal = pendingItems.reduce((s, it) => s + unitPrice(it) * it._pendingQty, 0);
+  const selectedCount = Object.values(selectedQty).reduce((s, q) => s + (q || 0), 0);
+  const selectedSubtotal = pendingItems.reduce((s, it) => s + unitPrice(it) * (selectedQty[it._idx] || 0), 0);
 
   const totalFull = Math.max(0, pendingSubtotal - Number(discount || 0) + Number(extra || 0));
   const totalToPay = payMode === "partial" ? selectedSubtotal : totalFull;
@@ -71,15 +84,17 @@ export default function Cashier() {
       setPayments([{ ...payments[0], amount: totalToPay }]);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [discount, extra, payMode, selectedItems]);
+  }, [discount, extra, payMode, selectedQty]);
 
-  const toggleSelect = (idx) => setSelectedItems(prev => {
-    const n = new Set(prev);
-    if (n.has(idx)) n.delete(idx); else n.add(idx);
+  const setQty = (idx, qty, max) => setSelectedQty(prev => {
+    const clamped = Math.max(0, Math.min(max, qty));
+    const n = { ...prev, [idx]: clamped };
+    if (!clamped) delete n[idx];
     return n;
   });
-  const selectAll = () => setSelectedItems(new Set(pendingItems.map(it => it._idx)));
-  const clearSel = () => setSelectedItems(new Set());
+  const stepQty = (idx, delta, max) => setQty(idx, (selectedQty[idx] || 0) + delta, max);
+  const selectAll = () => setSelectedQty(Object.fromEntries(pendingItems.map(it => [it._idx, it._pendingQty])));
+  const clearSel = () => setSelectedQty({});
 
   const addPay = () => setPayments(p => [...p, { uid: crypto.randomUUID(), method: "efectivo", amount: remaining, tip: 0 }]);
   const delPay = (i) => setPayments(p => p.filter((_, x) => x !== i));
@@ -87,24 +102,35 @@ export default function Cashier() {
 
   const openFullPay = () => { setPayMode("full"); setTipPercent(0); setPayments([{ uid: crypto.randomUUID(), method: "efectivo", amount: totalFull, tip: 0 }]); setPayDlgOpen(true); };
   const openPartialPay = () => {
-    if (!selectedItems.size) return toast.error("Selecciona al menos un plato para cobrar");
+    if (!selectedCount) return toast.error("Selecciona al menos una unidad para cobrar");
     setPayMode("partial");
+    setTipPercent(0);
     setPayments([{ uid: crypto.randomUUID(), method: "efectivo", amount: selectedSubtotal, tip: 0 }]);
     setPayDlgOpen(true);
+  };
+
+  const applyTipPreset = (pct) => {
+    setTipPercent(pct);
+    const tipAmt = pct > 0 ? +(totalToPay * pct / 100).toFixed(2) : 0;
+    setPayments(prev => prev.map((p, i) => i === 0
+      ? { ...p, tip: tipAmt, amount: +(totalToPay + tipAmt).toFixed(2) }
+      : p));
   };
 
   const confirmPay = async () => {
     try {
       if (paidSum + 0.01 < grandTotal) return toast.error("El monto pagado es menor al total");
       if (payMode === "partial") {
-        const indexes = [...selectedItems];
+        const items = Object.entries(selectedQty)
+          .filter(([, qty]) => qty > 0)
+          .map(([idx, qty]) => ({ index: Number(idx), qty }));
         const consolidated = {
           method: payments[0].method,
           amount: paidSum,
           tip: payments.reduce((s, p) => s + Number(p.tip || 0), 0),
         };
-        const { data: updated } = await api.post(`/orders/${sel.id}/partial-payment`, { item_indexes: indexes, payment: consolidated });
-        toast.success(`Pago parcial registrado · ${indexes.length} plato${indexes.length > 1 ? "s" : ""} cobrados`);
+        const { data: updated } = await api.post(`/orders/${sel.id}/partial-payment`, { items, payment: consolidated });
+        toast.success(`Pago parcial registrado · ${selectedCount} unidad${selectedCount > 1 ? "es" : ""} cobrada${selectedCount > 1 ? "s" : ""}`);
         // Update right-panel state immediately (WS may be delayed)
         if (updated.paid) {
           window.open(`${API}/orders/${sel.id}/ticket`, "_blank");
@@ -125,9 +151,35 @@ export default function Cashier() {
         setMobileView("orders");
       }
       setPayDlgOpen(false);
-      setSelectedItems(new Set());
+      setSelectedQty({});
       load();
     } catch (e) { toast.error(e?.response?.data?.detail || "Error al cobrar"); }
+  };
+
+  useEffect(() => {
+    if (!addItemOpen || catalog.products.length) return;
+    (async () => {
+      const [c, p] = await Promise.all([api.get("/categories"), api.get("/products")]);
+      setCatalog({ cats: c.data, products: p.data });
+      if (c.data[0]) setAddItemCat(c.data[0].id);
+    })();
+  }, [addItemOpen, catalog.products.length]);
+
+  const addProductToOrder = async (product) => {
+    if (!sel) return;
+    setAddingProductId(product.id);
+    try {
+      const { data: updated } = await api.post(`/orders/${sel.id}/items`, {
+        product_id: product.id, qty: 1, modifier_ids: [], notes: "", added: true,
+      });
+      setSel(updated);
+      setOrders(prev => prev.map(o => o.id === updated.id ? updated : o));
+      toast.success(`${product.name} agregado al pedido`);
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "No se pudo agregar el producto");
+    } finally {
+      setAddingProductId(null);
+    }
   };
 
   const cancelOrder = async () => {
@@ -166,8 +218,12 @@ export default function Cashier() {
           <div className="flex-1 overflow-y-auto p-3 space-y-2" data-testid="cashier-orders">
             {orders.map(o => {
               const b = statusBadge(o.status);
-              const pendCount = o.items.filter(it => !it.paid).length;
-              const partialPaid = o.items.some(it => it.paid);
+              const pendCount = o.items.filter(it => (it.paid_qty || 0) < it.qty).length;
+              const partialPaid = o.items.some(it => (it.paid_qty || 0) > 0);
+              const pendAmount = o.items.reduce((s, it) => {
+                const up = it.qty ? it.line_total / it.qty : 0;
+                return s + up * (it.qty - (it.paid_qty || 0));
+              }, 0);
               return (
                 <button key={o.id} onClick={() => handleOpen(o)} data-testid={`cashier-order-${o.id}`}
                   className={`w-full text-left p-4 rounded-xl border-2 transition-all ${sel?.id === o.id ? "border-[#D45D3C] bg-[#F3E8E0]" : "border-[#E5E0D8] bg-white hover:border-[#D45D3C]"}`}>
@@ -177,7 +233,7 @@ export default function Cashier() {
                       <div className="text-xs text-[#8A8A8A] uppercase tracking-wider">{o.code} · {pendCount}/{o.items.length} pendiente{pendCount !== 1 ? "s" : ""}</div>
                     </div>
                     <div className="text-right">
-                      <div className="font-bold text-[#D45D3C]">S/ {o.items.filter(it => !it.paid).reduce((s, it) => s + it.line_total, 0).toFixed(2)}</div>
+                      <div className="font-bold text-[#D45D3C]">S/ {pendAmount.toFixed(2)}</div>
                       <span className={`inline-block mt-1 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${b.bg} ${b.text}`}>{b.label}</span>
                       {partialPaid && <div className="text-[10px] text-emerald-700 font-bold mt-1">PAGO PARCIAL</div>}
                     </div>
@@ -225,18 +281,32 @@ export default function Cashier() {
                 </div>
                 <div className="space-y-1 mb-4" data-testid="cashier-pending-items">
                   {pendingItems.map(it => {
-                    const checked = selectedItems.has(it._idx);
+                    const qtySel = selectedQty[it._idx] || 0;
+                    const up = unitPrice(it);
                     return (
-                      <label key={`p-${it._idx}`} data-testid={`cashier-item-${it._idx}`}
-                        className={`flex items-start gap-3 p-2 rounded-lg cursor-pointer transition-colors ${checked ? "bg-[#F3E8E0]" : "hover:bg-[#F9F8F6]"}`}>
-                        <Checkbox checked={checked} onCheckedChange={() => toggleSelect(it._idx)} className="mt-1" data-testid={`cashier-item-check-${it._idx}`} />
+                      <div key={`p-${it._idx}`} data-testid={`cashier-item-${it._idx}`}
+                        className={`flex items-start gap-3 p-2 rounded-lg transition-colors ${qtySel > 0 ? "bg-[#F3E8E0]" : "hover:bg-[#F9F8F6]"}`}>
                         <div className="flex-1">
-                          <div className="font-semibold">{it.qty}x {it.name}</div>
+                          <div className="font-semibold">{it._pendingQty}x {it.name}{it._pendingQty !== it.qty ? <span className="text-xs text-[#8A8A8A] font-normal"> (de {it.qty})</span> : null}</div>
                           {it.modifiers.map((m, j) => (<div key={`${m.id}-${j}`} className="text-xs text-[#8A8A8A] ml-1">+ {m.name}{m.price_delta ? ` (S/ ${m.price_delta.toFixed(2)})` : ""}</div>))}
                           {it.notes && <div className="text-xs italic text-[#8A8A8A] ml-1">"{it.notes}"</div>}
+                          <div className="text-xs text-[#8A8A8A] mt-1">S/ {up.toFixed(2)} c/u</div>
                         </div>
-                        <div className="font-semibold text-[#2C2C2C]">S/ {it.line_total.toFixed(2)}</div>
-                      </label>
+                        <div className="flex flex-col items-end gap-1">
+                          <div className="flex items-center gap-1 border-2 border-[#E5E0D8] rounded-xl overflow-hidden">
+                            <button type="button" onClick={() => stepQty(it._idx, -1, it._pendingQty)} disabled={qtySel <= 0}
+                              data-testid={`item-qty-minus-${it._idx}`}
+                              className="h-9 w-9 flex items-center justify-center text-[#5E5E5E] disabled:opacity-30 hover:bg-[#F3E8E0]">−</button>
+                            <button type="button" onClick={() => setQtyDlg({ idx: it._idx, value: String(qtySel), max: it._pendingQty })}
+                              data-testid={`item-qty-value-${it._idx}`}
+                              className="min-w-[2.25rem] h-9 px-1 font-semibold text-center">{qtySel}</button>
+                            <button type="button" onClick={() => stepQty(it._idx, 1, it._pendingQty)} disabled={qtySel >= it._pendingQty}
+                              data-testid={`item-qty-plus-${it._idx}`}
+                              className="h-9 w-9 flex items-center justify-center text-[#5E5E5E] disabled:opacity-30 hover:bg-[#F3E8E0]">+</button>
+                          </div>
+                          <div className="font-semibold text-[#2C2C2C] text-sm">S/ {(up * it._pendingQty).toFixed(2)}</div>
+                        </div>
+                      </div>
                     );
                   })}
                   {pendingItems.length === 0 && <div className="text-center text-[#8A8A8A] py-6 text-sm">Todos los platos están pagados</div>}
@@ -250,31 +320,30 @@ export default function Cashier() {
                       {paidItems.map(it => (
                         <div key={`x-${it._idx}`} className="flex items-center gap-3 p-2 rounded-lg bg-emerald-50/60 opacity-70">
                           <CheckCircle2 className="h-4 w-4 text-emerald-700"/>
-                          <div className="flex-1 line-through text-sm text-[#5E5E5E]">{it.qty}x {it.name}</div>
-                          <div className="text-xs text-emerald-700 font-semibold">S/ {it.line_total.toFixed(2)}</div>
+                          <div className="flex-1 line-through text-sm text-[#5E5E5E]">{it.paid_qty}x {it.name}</div>
+                          <div className="text-xs text-emerald-700 font-semibold">S/ {(unitPrice(it) * it.paid_qty).toFixed(2)}</div>
                         </div>
                       ))}
                     </div>
                   </>
                 )}
 
-                <div className="grid grid-cols-2 gap-3 mt-4">
+                <div className="grid grid-cols-2 gap-3 mt-4 items-end">
                   <div>
                     <Label>Descuento (S/)</Label>
                     <Input type="number" step="0.1" value={discount} onChange={e => setDiscount(e.target.value)} data-testid="discount-input" className="h-11 rounded-xl" />
                   </div>
-                  <div>
-                    <Label>Cargo extra (S/)</Label>
-                    <Input type="number" step="0.1" value={extra} onChange={e => setExtra(e.target.value)} data-testid="extra-input" className="h-11 rounded-xl" />
-                  </div>
+                  <Button type="button" variant="outline" onClick={() => setAddItemOpen(true)} data-testid="open-waiter-panel-btn" className="h-11 rounded-xl border-2 border-dashed">
+                    <PlusCircle className="h-4 w-4 mr-2" />Agregar cargo / plato
+                  </Button>
                 </div>
-                <div className="text-[10px] text-[#8A8A8A] mt-1">El descuento y cargo extra solo aplican al cierre total.</div>
+                <div className="text-[10px] text-[#8A8A8A] mt-1">El descuento solo aplica al cierre total. Para un cargo extra, agrégalo como plato para que quede en Liquidación.</div>
               </div>
 
               <div className="p-4 border-t border-[#E5E0D8] bg-[#F9F8F6] space-y-2">
-                {selectedItems.size > 0 && (
+                {selectedCount > 0 && (
                   <div className="flex justify-between items-baseline bg-[#F3E8E0] rounded-xl p-3">
-                    <span className="text-sm font-semibold">{selectedItems.size} plato{selectedItems.size > 1 ? "s" : ""} seleccionado{selectedItems.size > 1 ? "s" : ""}</span>
+                    <span className="text-sm font-semibold">{selectedCount} unidad{selectedCount > 1 ? "es" : ""} seleccionada{selectedCount > 1 ? "s" : ""}</span>
                     <span className="heading font-bold text-xl text-[#D45D3C]" data-testid="selected-subtotal">S/ {selectedSubtotal.toFixed(2)}</span>
                   </div>
                 )}
@@ -285,7 +354,7 @@ export default function Cashier() {
                 </div>
                 <div className="flex flex-col sm:flex-row gap-2">
                   <Button onClick={openPartialPay} data-testid="charge-selected-btn"
-                    disabled={!selectedItems.size}
+                    disabled={!selectedCount}
                     variant="outline"
                     className="w-full h-12 rounded-xl border-2">
                     <Split className="h-4 w-4 mr-2" />Cobrar seleccionados
@@ -311,7 +380,7 @@ export default function Cashier() {
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>
-              {payMode === "partial" ? `Cobrar ${selectedItems.size} plato${selectedItems.size > 1 ? "s" : ""}` : "Cerrar pedido"} · S/ {grandTotal.toFixed(2)}
+              {payMode === "partial" ? `Cobrar ${selectedCount} unidad${selectedCount > 1 ? "es" : ""}` : "Cerrar pedido"} · S/ {grandTotal.toFixed(2)}
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-3">
@@ -353,6 +422,82 @@ export default function Cashier() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setPayDlgOpen(false)}>Cancelar</Button>
             <Button onClick={confirmPay} data-testid="confirm-pay-btn" className="bg-[#D45D3C] hover:bg-[#C04F30]">Confirmar</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Panel de mozo: agregar un producto (o "cargo extra" como plato) al pedido abierto */}
+      <Dialog open={addItemOpen} onOpenChange={setAddItemOpen}>
+        <DialogContent className="max-w-lg max-h-[80vh] flex flex-col">
+          <DialogHeader>
+            <DialogTitle>Agregar al pedido {sel?.code}</DialogTitle>
+          </DialogHeader>
+          <div className="relative">
+            <Search className="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2 text-[#8A8A8A]" />
+            <Input placeholder="Buscar producto..." value={addItemSearch} onChange={e => setAddItemSearch(e.target.value)}
+              data-testid="add-item-search" className="h-11 rounded-xl pl-9" />
+          </div>
+          {!addItemSearch && (
+            <div className="flex gap-2 overflow-x-auto pb-1">
+              {catalog.cats.map(c => (
+                <button key={c.id} onClick={() => setAddItemCat(c.id)} data-testid={`add-item-cat-${c.id}`}
+                  className={`px-3 h-9 rounded-full text-sm font-semibold whitespace-nowrap border-2 ${addItemCat === c.id ? "border-[#D45D3C] bg-[#F3E8E0] text-[#D45D3C]" : "border-[#E5E0D8] text-[#5E5E5E]"}`}>
+                  {c.name}
+                </button>
+              ))}
+            </div>
+          )}
+          <div className="flex-1 overflow-y-auto space-y-1 pr-1" data-testid="add-item-product-list">
+            {catalog.products
+              .filter(p => p.available !== false)
+              .filter(p => addItemSearch ? p.name.toLowerCase().includes(addItemSearch.toLowerCase()) : p.category_id === addItemCat)
+              .map(p => (
+                <button key={p.id} onClick={() => addProductToOrder(p)} disabled={addingProductId === p.id}
+                  data-testid={`add-item-product-${p.id}`}
+                  className="w-full flex items-center justify-between p-3 rounded-xl border-2 border-[#E5E0D8] hover:border-[#D45D3C] text-left disabled:opacity-50">
+                  <span className="font-semibold">{p.name}</span>
+                  <span className="flex items-center gap-2 text-[#D45D3C] font-bold">
+                    S/ {p.price.toFixed(2)} <Plus className="h-4 w-4" />
+                  </span>
+                </button>
+              ))}
+            {catalog.products.length === 0 && <div className="text-center text-[#8A8A8A] py-8 text-sm">Cargando productos...</div>}
+          </div>
+          <div className="text-[10px] text-[#8A8A8A]">Cada producto agregado se une al pedido de inmediato y queda ligado a su socio en Liquidación.</div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setAddItemOpen(false)}>Listo</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Mini diálogo: escribir directamente cuántas unidades de un plato cobrar */}
+      <Dialog open={!!qtyDlg} onOpenChange={(o) => !o && setQtyDlg(null)}>
+        <DialogContent className="max-w-xs">
+          <DialogHeader>
+            <DialogTitle>¿Cuántas unidades cobrar?</DialogTitle>
+          </DialogHeader>
+          {qtyDlg && (
+            <div className="space-y-2">
+              <Input
+                type="number" min={0} max={qtyDlg.max} step={1}
+                value={qtyDlg.value}
+                onChange={e => setQtyDlg({ ...qtyDlg, value: e.target.value })}
+                data-testid="item-qty-dialog-input"
+                className="h-12 rounded-xl text-center text-lg"
+                autoFocus
+              />
+              <div className="text-xs text-[#8A8A8A] text-center">Máximo {qtyDlg.max} por cobrar</div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setQtyDlg(null)}>Cancelar</Button>
+            <Button
+              data-testid="item-qty-dialog-confirm"
+              className="bg-[#D45D3C] hover:bg-[#C04F30]"
+              onClick={() => { setQty(qtyDlg.idx, Number(qtyDlg.value) || 0, qtyDlg.max); setQtyDlg(null); }}
+            >
+              Aplicar
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
