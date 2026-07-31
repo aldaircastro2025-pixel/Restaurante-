@@ -13,6 +13,7 @@ import { toast } from "sonner";
 import { Plus, Trash2, Pencil, Package, Tag, Sliders, Users as UsersIcon, BarChart3, Wallet } from "lucide-react";
 import Reports from "@/pages/Reports";
 
+
 export default function AdminDashboard() {
   const [tab, setTab] = useState("reports");
   return (
