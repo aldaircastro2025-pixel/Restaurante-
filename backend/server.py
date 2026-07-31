@@ -143,7 +143,8 @@ class OrderItem(BaseModel):
     notes: str = ""
     line_total: float
     done: bool = False   # KDS marked as prepared
-    paid: bool = False   # Cashier marked as paid (split bill)
+    paid: bool = False   # Cashier marked as paid (split bill) -- True when paid_qty == qty
+    paid_qty: int = 0    # units of this line already paid (for partial/split-by-quantity payments)
 
 class OrderItemIn(BaseModel):
     product_id: str
@@ -233,6 +234,7 @@ async def compute_order_totals(items: List[OrderItemIn]) -> (List[dict], float):
             "line_total": round(line, 2),
             "done": False,
             "paid": False,
+            "paid_qty": 0,
             "added": it.added,
         })
         total += line
@@ -445,26 +447,33 @@ async def close_order(oid: str, body: CloseIn, user=Depends(require_roles("cashi
         raise HTTPException(404, "Pedido no encontrado")
     if o.get("paid"):
         raise HTTPException(400, "Pedido ya pagado")
-    # Solo se exige el monto de lo que falta por cobrar: los platos ya
-    # cobrados con "cobrar parcial" (item.paid == True) no se vuelven a sumar.
-    pending_subtotal = sum(it["line_total"] for it in o["items"] if not it.get("paid"))
-    total = round(pending_subtotal - body.discount + body.extra_charge, 2)
+    items = o["items"]
+    # "Cobrar todo" solo debe exigir lo que falta por cobrar: si algunos platos (o
+    # unidades de un plato) ya se pagaron por separado, no se vuelven a cobrar.
+    remaining_subtotal = 0.0
+    for it in items:
+        qty = it.get("qty", 1)
+        paid_qty = it.get("paid_qty", 0)
+        pending_qty = qty - paid_qty
+        if pending_qty <= 0:
+            continue
+        unit_price = it["line_total"] / qty if qty else 0
+        remaining_subtotal += unit_price * pending_qty
+    remaining_subtotal = round(remaining_subtotal, 2)
+    total = round(remaining_subtotal - body.discount + body.extra_charge, 2)
     paid_sum = round(sum(p.amount for p in body.payments), 2)
     if paid_sum + 0.01 < total:
         raise HTTPException(400, f"Monto pagado ({paid_sum}) menor al total ({total})")
-    # Marca como pagados los items pendientes que se están cobrando ahora.
-    items = o["items"]
     for it in items:
+        it["paid_qty"] = it.get("qty", 1)
         it["paid"] = True
     prior_payments = o.get("payments", [])
-    all_payments = prior_payments + [p.model_dump() for p in body.payments]
-    grand_total = round(sum(p["amount"] for p in all_payments), 2)
     upd = {
         "items": items,
-        "discount": body.discount,
-        "extra_charge": body.extra_charge,
-        "total": grand_total,
-        "payments": all_payments,
+        "discount": round(o.get("discount", 0.0) + body.discount, 2),
+        "extra_charge": round(o.get("extra_charge", 0.0) + body.extra_charge, 2),
+        "total": round(sum(p.get("amount", 0) for p in prior_payments) + total, 2),
+        "payments": prior_payments + [p.model_dump() for p in body.payments],
         "paid": True,
         "status": "closed",
         "closed_at": datetime.now(timezone.utc).isoformat(),
@@ -525,9 +534,16 @@ async def toggle_item(oid: str, idx: int, body: ItemToggleIn, user=Depends(get_c
         await manager.broadcast("order.closed", o2)
     return o2
 
-# ---- Partial payment (split bill by items) ----
+# ---- Partial payment (split bill by items, and by unit quantity within an item) ----
+class PartialPaymentItem(BaseModel):
+    index: int
+    qty: int = 1  # unidades de esa línea a cobrar ahora (permite pagar solo parte de "2x Café")
+
 class PartialPaymentIn(BaseModel):
-    item_indexes: List[int]
+    # `items` es el formato nuevo (permite cantidades parciales). `item_indexes` se
+    # mantiene por compatibilidad: cobra la línea completa (todas sus unidades pendientes).
+    items: Optional[List[PartialPaymentItem]] = None
+    item_indexes: Optional[List[int]] = None
     payment: PaymentIn
 
 @api.post("/orders/{oid}/partial-payment")
@@ -537,17 +553,35 @@ async def partial_payment(oid: str, body: PartialPaymentIn, user=Depends(require
         raise HTTPException(404, "Pedido no encontrado")
     if o.get("paid"):
         raise HTTPException(400, "Pedido ya pagado")
-    if not body.item_indexes:
-        raise HTTPException(400, "Debe seleccionar al menos un item")
     items = o["items"]
+
+    entries: List[PartialPaymentItem] = []
+    if body.items:
+        entries = body.items
+    elif body.item_indexes:
+        for idx in body.item_indexes:
+            if idx < 0 or idx >= len(items):
+                raise HTTPException(400, f"Índice inválido: {idx}")
+            pending = items[idx].get("qty", 1) - items[idx].get("paid_qty", 0)
+            entries.append(PartialPaymentItem(index=idx, qty=pending))
+    if not entries:
+        raise HTTPException(400, "Debe seleccionar al menos un item")
+
     selected_total = 0.0
-    for idx in body.item_indexes:
-        if idx < 0 or idx >= len(items):
-            raise HTTPException(400, f"Índice inválido: {idx}")
-        if items[idx].get("paid"):
-            raise HTTPException(400, f"Item {idx} ya está pagado")
-        items[idx]["paid"] = True
-        selected_total += items[idx]["line_total"]
+    for e in entries:
+        if e.index < 0 or e.index >= len(items):
+            raise HTTPException(400, f"Índice inválido: {e.index}")
+        it = items[e.index]
+        qty = it.get("qty", 1)
+        paid_qty = it.get("paid_qty", 0)
+        pending_qty = qty - paid_qty
+        if e.qty <= 0 or e.qty > pending_qty:
+            raise HTTPException(400, f"Cantidad inválida para '{it.get('name','item')}': quedan {pending_qty} por cobrar")
+        unit_price = it["line_total"] / qty if qty else 0
+        selected_total += unit_price * e.qty
+        new_paid_qty = paid_qty + e.qty
+        it["paid_qty"] = new_paid_qty
+        it["paid"] = new_paid_qty >= qty
     selected_total = round(selected_total, 2)
     if body.payment.amount + 0.01 < selected_total:
         raise HTTPException(400, f"Pago ({body.payment.amount}) menor al total seleccionado ({selected_total})")
@@ -568,6 +602,31 @@ async def partial_payment(oid: str, body: PartialPaymentIn, user=Depends(require
     await manager.broadcast("order.update", o2)
     if update.get("paid"):
         await manager.broadcast("order.closed", o2)
+    return o2
+
+# ---- Add a single item to an existing order without disturbing paid items ----
+# Usado por el panel de "cargo extra": en vez de un monto suelto, el cajero agrega
+# un producto real ligado a un socio para que el cargo aparezca en Liquidación.
+@api.post("/orders/{oid}/items")
+async def add_item(oid: str, body: OrderItemIn, user=Depends(require_roles("waiter", "cashier"))):
+    o = await db.orders.find_one({"id": oid})
+    if not o:
+        raise HTTPException(404, "Pedido no encontrado")
+    if o.get("paid"):
+        raise HTTPException(400, "Pedido ya pagado")
+    new_items, _ = await compute_order_totals([body])
+    items = o["items"] + new_items
+    subtotal = round(sum(i["line_total"] for i in items), 2)
+    total = round(subtotal - o.get("discount", 0.0) + o.get("extra_charge", 0.0), 2)
+    update = {
+        "items": items,
+        "subtotal": subtotal,
+        "total": total,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.orders.update_one({"id": oid}, {"$set": update})
+    o2 = await db.orders.find_one({"id": oid}, {"_id": 0})
+    await manager.broadcast("order.update", o2)
     return o2
 
 # ================= REPORTS =================
@@ -916,9 +975,22 @@ async def socios_report(frm: str = Query(...), to: str = Query(...), user=Depend
     for socio in socios:
         pid_set = set(socio.get("product_ids", []))
         total = 0.0
+        discount_share = 0.0
         units = 0
         breakdown = {}
         for order in orders:
+            order_gross = sum(item.get("line_total", 0) for item in order.get("items", []))
+            socio_gross_this_order = sum(
+                item.get("line_total", 0) for item in order.get("items", []) if item.get("product_id") in pid_set
+            )
+            if socio_gross_this_order <= 0:
+                continue
+            # El descuento del pedido se reparte proporcional a lo que cada socio
+            # vendió dentro de ese pedido, para que Liquidación refleje lo realmente
+            # cobrado (no el precio de catálogo).
+            order_discount = order.get("discount", 0.0)
+            if order_discount and order_gross > 0:
+                discount_share += order_discount * (socio_gross_this_order / order_gross)
             for item in order.get("items", []):
                 if item.get("product_id") in pid_set:
                     qty = item.get("qty", 1)
@@ -930,11 +1002,14 @@ async def socios_report(frm: str = Query(...), to: str = Query(...), user=Depend
                         breakdown[pid] = {"name": item.get("name", ""), "qty": 0, "total": 0.0}
                     breakdown[pid]["qty"] += qty
                     breakdown[pid]["total"] = round(breakdown[pid]["total"] + line, 2)
+        discount_share = round(discount_share, 2)
         result.append({
             "id": socio["id"],
             "name": socio["name"],
             "color": socio["color"],
             "total": round(total, 2),
+            "discount": discount_share,
+            "net_total": round(total - discount_share, 2),
             "units": units,
             "breakdown": list(breakdown.values()),
         })
