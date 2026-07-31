@@ -6,7 +6,6 @@
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "orientation": "any",
   "background_color": "#F9F8F6",
   "theme_color": "#D45D3C",
   "categories": ["business", "productivity", "food"],
