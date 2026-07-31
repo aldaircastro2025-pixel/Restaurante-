@@ -630,12 +630,22 @@ async def add_item(oid: str, body: OrderItemIn, user=Depends(require_roles("wait
     return o2
 
 # ================= REPORTS =================
+# El restaurante siempre opera en hora de Perú (UTC-5, sin horario de verano).
+# closed_at se guarda siempre en UTC; cualquier fecha/hora "sin zona horaria"
+# que llegue del frontend se asume que es hora de Perú, nunca UTC.
+PERU_TZ = timezone(timedelta(hours=-5))
+
+def _peru_day_start_utc(year: int, month: int, day: int) -> datetime:
+    """Medianoche (00:00) de esa fecha en Perú, devuelta como datetime UTC."""
+    return datetime(year, month, day, tzinfo=PERU_TZ).astimezone(timezone.utc)
+
 def _parse_dt(s: str) -> datetime:
-    # Accept ISO strings with or without timezone
+    # Acepta ISO con o sin zona horaria. Si no trae zona, se asume hora de Perú
+    # (no UTC) porque así es como el frontend construye los rangos de fecha.
     dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt
+        dt = dt.replace(tzinfo=PERU_TZ)
+    return dt.astimezone(timezone.utc)
 
 async def _closed_orders_in_range(frm: datetime, to: datetime, projection: dict | None = None):
     q = {"paid": True, "closed_at": {"$gte": frm.isoformat(), "$lt": to.isoformat()}}
@@ -643,17 +653,25 @@ async def _closed_orders_in_range(frm: datetime, to: datetime, projection: dict 
     return await db.orders.find(q, proj).to_list(50000)
 
 @api.get("/reports/kpis")
-async def report_kpis(user=Depends(require_roles("admin"))):
-    now = datetime.now(timezone.utc)
-    today = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
-    yest = today - timedelta(days=1)
-    week = today - timedelta(days=now.weekday())
-    prev_week = week - timedelta(days=7)
-    month = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
-    prev_month = datetime(now.year - 1, 12, 1, tzinfo=timezone.utc) if now.month == 1 else datetime(now.year, now.month - 1, 1, tzinfo=timezone.utc)
-    year = datetime(now.year, 1, 1, tzinfo=timezone.utc)
-    prev_year = datetime(now.year - 1, 1, 1, tzinfo=timezone.utc)
+async def report_kpis(to: Optional[str] = Query(None), user=Depends(require_roles("admin"))):
+    # "to" es la fecha/hora seleccionada en el filtro del reporte (fin del rango).
+    # Se usa como ancla para "hoy", así las tarjetas respetan el filtro elegido
+    # en vez de mostrar siempre el día real del servidor.
+    ref = _parse_dt(to) if to else datetime.now(timezone.utc)
+    ref_local = ref.astimezone(PERU_TZ)
+
+    today = _peru_day_start_utc(ref_local.year, ref_local.month, ref_local.day)
     tomorrow = today + timedelta(days=1)
+    yest = today - timedelta(days=1)
+    week = today - timedelta(days=ref_local.weekday())
+    prev_week = week - timedelta(days=7)
+    month = _peru_day_start_utc(ref_local.year, ref_local.month, 1)
+    if ref_local.month == 1:
+        prev_month = _peru_day_start_utc(ref_local.year - 1, 12, 1)
+    else:
+        prev_month = _peru_day_start_utc(ref_local.year, ref_local.month - 1, 1)
+    year = _peru_day_start_utc(ref_local.year, 1, 1)
+    prev_year = _peru_day_start_utc(ref_local.year - 1, 1, 1)
 
     async def agg(ds, de):
         docs = await _closed_orders_in_range(ds, de, {"_id": 0, "total": 1})
