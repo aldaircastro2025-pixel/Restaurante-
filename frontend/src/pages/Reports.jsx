@@ -11,35 +11,33 @@ import {
   Award, Clock, Calendar, Flame, Minus,
 } from "lucide-react";
 
+import { cn, peruDateInput, peruISO, shiftYMD, peruYMD } from "@/lib/utils";
+
 const COLORS = ["#D45D3C", "#E67E22", "#2C2C2C", "#8A8A8A", "#5E5E5E"];
 
 // ---------- Helpers ----------
 const fmt = (n) => `S/ ${Number(n || 0).toFixed(2)}`;
 const fmtInt = (n) => Number(n || 0).toLocaleString("es-PE");
-
 const pad = (n) => String(n).padStart(2, "0");
-const toISO = (d) => d.toISOString();
 
 function rangeFromPreset(preset) {
-  const now = new Date();
-  const startOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0);
-  const endOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59);
-  const mondayOf = (d) => {
-    const x = startOfDay(d);
-    const diff = (x.getDay() + 6) % 7;
-    x.setDate(x.getDate() - diff);
-    return x;
+  const today = peruDateInput(); // "YYYY-MM-DD" del día actual en Perú
+  const mondayOf = (ymd) => {
+    const { year, month, day } = peruYMD(new Date(peruISO(ymd)));
+    const dow = new Date(Date.UTC(year, month - 1, day)).getUTCDay(); // 0=Dom
+    const diff = (dow + 6) % 7; // días desde el lunes
+    return shiftYMD(ymd, -diff);
   };
   switch (preset) {
-    case "today":    return [startOfDay(now), endOfDay(now)];
-    case "yesterday":{ const y = new Date(now); y.setDate(y.getDate()-1); return [startOfDay(y), endOfDay(y)]; }
-    case "week":     return [mondayOf(now), endOfDay(now)];
-    case "month":    return [new Date(now.getFullYear(), now.getMonth(), 1), endOfDay(now)];
-    case "year":     return [new Date(now.getFullYear(), 0, 1), endOfDay(now)];
-    default:         return [startOfDay(now), endOfDay(now)];
+    case "today":     return [today, today];
+    case "yesterday": { const y = shiftYMD(today, -1); return [y, y]; }
+    case "week":      return [mondayOf(today), today];
+    case "month":     return [`${today.slice(0, 7)}-01`, today];
+    case "year":      return [`${today.slice(0, 4)}-01-01`, today];
+    default:          return [today, today];
   }
 }
-const toInput = (d) => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+const toInput = (ymd) => ymd; // rangeFromPreset ya devuelve "YYYY-MM-DD"
 
 function deltaPct(cur, prev) {
   if (!prev) return cur > 0 ? 100 : 0;
@@ -96,14 +94,14 @@ export default function Reports() {
   const loadAll = async () => {
     setLoading(true);
     try {
-      const fromISO = toISO(new Date(from + "T00:00:00"));
-      const toISOv = toISO(new Date(to + "T23:59:59"));
+      const fromISO = peruISO(from, "00:00:00");
+      const toISOv = peruISO(to, "23:59:59");
       const qs = `from=${encodeURIComponent(fromISO)}&to=${encodeURIComponent(toISOv)}`;
       const spanDays = Math.ceil((new Date(to) - new Date(from)) / 86400000) + 1;
       const bucket = spanDays <= 2 ? "hour" : "day";
 
       const [k, ts, pr, h, wd, pm, od] = await Promise.all([
-        api.get("/reports/kpis"),
+        api.get(`/reports/kpis?to=${encodeURIComponent(toISOv)}`),
         api.get(`/reports/timeseries?${qs}&bucket=${bucket}`),
         api.get(`/reports/products?${qs}&limit=10`),
         api.get(`/reports/hourly?${qs}`),
