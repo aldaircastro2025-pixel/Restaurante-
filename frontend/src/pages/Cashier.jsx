@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { toast } from "sonner";
 import { Banknote, Printer, Trash2, Split, CreditCard, CheckCircle2, PlusCircle, Search, Plus } from "lucide-react";
 
+
 export default function Cashier() {
   const [orders, setOrders] = useState([]);
   const [sel, setSel] = useState(null);
