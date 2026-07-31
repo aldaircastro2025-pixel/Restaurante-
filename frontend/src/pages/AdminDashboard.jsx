@@ -12,7 +12,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
 import { Plus, Trash2, Pencil, Package, Tag, Sliders, Users as UsersIcon, BarChart3, Wallet } from "lucide-react";
 import Reports from "@/pages/Reports";
-
+import { peruDateInput, peruISO, peruYMD, shiftYMD } from "@/lib/utils";
 
 export default function AdminDashboard() {
   const [tab, setTab] = useState("reports");
@@ -57,24 +57,25 @@ function Liquidacion() {
   const [report, setReport] = useState(null);
   const [loading, setLoading] = useState(false);
 
-  const today = new Date();
-  const fmt = (d) => d.toISOString().slice(0, 10);
-  const [frm, setFrm] = useState(fmt(new Date(today.getFullYear(), today.getMonth(), 1)));
-  const [to, setTo] = useState(fmt(today));
+  const today = peruDateInput(); // "YYYY-MM-DD" del día actual en Perú
+  const [frm, setFrm] = useState(`${today.slice(0, 7)}-01`);
+  const [to, setTo] = useState(today);
   const [period, setPeriod] = useState("month");
+
+  const mondayOf = (ymd) => {
+    const { year, month, day } = peruYMD(new Date(peruISO(ymd)));
+    const dow = new Date(Date.UTC(year, month - 1, day)).getUTCDay(); // 0=Dom
+    const diff = (dow + 6) % 7; // días desde el lunes
+    return shiftYMD(ymd, -diff);
+  };
 
   const setPeriodRange = (p) => {
     setPeriod(p);
-    const now = new Date();
-    if (p === "today") { setFrm(fmt(now)); setTo(fmt(now)); }
-    else if (p === "week") {
-      const d = new Date(now); d.setDate(now.getDate() - now.getDay());
-      setFrm(fmt(d)); setTo(fmt(now));
-    } else if (p === "month") {
-      setFrm(fmt(new Date(now.getFullYear(), now.getMonth(), 1))); setTo(fmt(now));
-    } else if (p === "year") {
-      setFrm(fmt(new Date(now.getFullYear(), 0, 1))); setTo(fmt(now));
-    }
+    const now = peruDateInput();
+    if (p === "today") { setFrm(now); setTo(now); }
+    else if (p === "week") { setFrm(mondayOf(now)); setTo(now); }
+    else if (p === "month") { setFrm(`${now.slice(0, 7)}-01`); setTo(now); }
+    else if (p === "year") { setFrm(`${now.slice(0, 4)}-01-01`); setTo(now); }
   };
 
   const load = async () => {
@@ -86,7 +87,9 @@ function Liquidacion() {
   const runReport = async () => {
     setLoading(true);
     try {
-      const r = await api.get(`/socios/report?frm=${frm}T00:00:00&to=${to}T23:59:59`);
+      const frmISO = peruISO(frm, "00:00:00");
+      const toISO = peruISO(to, "23:59:59");
+      const r = await api.get(`/socios/report?frm=${encodeURIComponent(frmISO)}&to=${encodeURIComponent(toISO)}`);
       setReport(r.data);
     } catch (e) { toast.error("Error al generar reporte"); }
     setLoading(false);
