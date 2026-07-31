@@ -248,23 +248,29 @@ export default function Cashier() {
         <section className={`md:col-span-7 card-surface flex flex-col overflow-hidden ${mobileView === "detail" ? "flex" : "hidden md:flex"}`}>
           {sel ? (
             <>
-              <div className="p-4 border-b border-[#E5E0D8] flex justify-between items-center">
-                <div className="flex items-center gap-2">
+              <div className="p-3 sm:p-4 border-b border-[#E5E0D8] flex justify-between items-center gap-2">
+                <div className="flex items-center gap-2 min-w-0">
                   <button
                     onClick={() => setMobileView("orders")}
-                    className="md:hidden h-9 w-9 rounded-xl border border-[#E5E0D8] flex items-center justify-center text-[#5E5E5E] hover:border-[#D45D3C] mr-1"
+                    className="md:hidden h-9 w-9 shrink-0 rounded-xl border border-[#E5E0D8] flex items-center justify-center text-[#5E5E5E] hover:border-[#D45D3C]"
                     aria-label="Volver"
                   >
                     ‹
                   </button>
-                  <div>
+                  <div className="min-w-0">
                     <div className="text-xs uppercase tracking-[0.2em] text-[#8A8A8A] font-bold">{sel.code}</div>
-                    <div className="heading font-bold text-2xl">{sel.table_number ? `Mesa ${sel.table_number}` : "Para llevar"}</div>
+                    <div className="heading font-bold text-lg sm:text-2xl truncate">{sel.table_number ? `Mesa ${sel.table_number}` : "Para llevar"}</div>
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  <Button variant="outline" onClick={() => window.open(`${API}/orders/${sel.id}/ticket`, "_blank")} data-testid="print-pre-ticket" className="rounded-xl h-11"><Printer className="h-4 w-4 mr-2" />Pre-cuenta</Button>
-                  <Button variant="outline" onClick={() => setCancelConfirm(true)} data-testid="cancel-order-btn" className="rounded-xl h-11 text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700"><Trash2 className="h-4 w-4 mr-2" />Anular</Button>
+                <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+                  <Button variant="outline" onClick={() => window.open(`${API}/orders/${sel.id}/ticket`, "_blank")} data-testid="print-pre-ticket"
+                    className="rounded-xl h-10 w-10 sm:h-11 sm:w-auto p-0 sm:px-4" aria-label="Pre-cuenta">
+                    <Printer className="h-4 w-4 sm:mr-2" /><span className="hidden sm:inline">Pre-cuenta</span>
+                  </Button>
+                  <Button variant="outline" onClick={() => setCancelConfirm(true)} data-testid="cancel-order-btn"
+                    className="rounded-xl h-10 w-10 sm:h-11 sm:w-auto p-0 sm:px-4 text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700" aria-label="Anular">
+                    <Trash2 className="h-4 w-4 sm:mr-2" /><span className="hidden sm:inline">Anular</span>
+                  </Button>
                 </div>
               </div>
               <div className="flex-1 overflow-y-auto p-4">
@@ -428,7 +434,7 @@ export default function Cashier() {
 
       {/* Panel de mozo: agregar un producto (o "cargo extra" como plato) al pedido abierto */}
       <Dialog open={addItemOpen} onOpenChange={setAddItemOpen}>
-        <DialogContent className="max-w-lg max-h-[80vh] flex flex-col">
+        <DialogContent className="max-w-lg max-h-[85vh] flex flex-col p-4 sm:p-6">
           <DialogHeader>
             <DialogTitle>Agregar al pedido {sel?.code}</DialogTitle>
           </DialogHeader>
@@ -438,34 +444,40 @@ export default function Cashier() {
               data-testid="add-item-search" className="h-11 rounded-xl pl-9" />
           </div>
           {!addItemSearch && (
-            <div className="flex gap-2 overflow-x-auto pb-1">
+            <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1">
               {catalog.cats.map(c => (
                 <button key={c.id} onClick={() => setAddItemCat(c.id)} data-testid={`add-item-cat-${c.id}`}
-                  className={`px-3 h-9 rounded-full text-sm font-semibold whitespace-nowrap border-2 ${addItemCat === c.id ? "border-[#D45D3C] bg-[#F3E8E0] text-[#D45D3C]" : "border-[#E5E0D8] text-[#5E5E5E]"}`}>
+                  className={`px-3.5 h-9 rounded-full text-sm font-semibold whitespace-nowrap border-2 shrink-0 transition-colors ${addItemCat === c.id ? "border-[#D45D3C] bg-[#F3E8E0] text-[#D45D3C]" : "border-[#E5E0D8] text-[#5E5E5E]"}`}>
                   {c.name}
                 </button>
               ))}
             </div>
           )}
-          <div className="flex-1 overflow-y-auto space-y-1 pr-1" data-testid="add-item-product-list">
+          <div className="flex-1 overflow-y-auto space-y-2 -mx-1 px-1" data-testid="add-item-product-list">
             {catalog.products
               .filter(p => p.available !== false)
               .filter(p => addItemSearch ? p.name.toLowerCase().includes(addItemSearch.toLowerCase()) : p.category_id === addItemCat)
               .map(p => (
                 <button key={p.id} onClick={() => addProductToOrder(p)} disabled={addingProductId === p.id}
                   data-testid={`add-item-product-${p.id}`}
-                  className="w-full flex items-center justify-between p-3 rounded-xl border-2 border-[#E5E0D8] hover:border-[#D45D3C] text-left disabled:opacity-50">
-                  <span className="font-semibold">{p.name}</span>
-                  <span className="flex items-center gap-2 text-[#D45D3C] font-bold">
-                    S/ {p.price.toFixed(2)} <Plus className="h-4 w-4" />
+                  className="w-full flex items-center gap-3 p-3 rounded-2xl border-2 border-[#E5E0D8] hover:border-[#D45D3C] active:bg-[#F9F8F6] text-left disabled:opacity-50 transition-colors">
+                  <span className="flex-1 font-semibold truncate">{p.name}</span>
+                  <span className="text-[#D45D3C] font-bold whitespace-nowrap">S/ {p.price.toFixed(2)}</span>
+                  <span className="h-8 w-8 shrink-0 rounded-full bg-[#F3E8E0] text-[#D45D3C] flex items-center justify-center">
+                    {addingProductId === p.id ? <span className="h-3.5 w-3.5 rounded-full border-2 border-[#D45D3C] border-t-transparent animate-spin" /> : <Plus className="h-4 w-4" />}
                   </span>
                 </button>
               ))}
             {catalog.products.length === 0 && <div className="text-center text-[#8A8A8A] py-8 text-sm">Cargando productos...</div>}
+            {catalog.products.length > 0 && catalog.products
+              .filter(p => p.available !== false)
+              .filter(p => addItemSearch ? p.name.toLowerCase().includes(addItemSearch.toLowerCase()) : p.category_id === addItemCat).length === 0 && (
+              <div className="text-center text-[#8A8A8A] py-8 text-sm">Sin resultados</div>
+            )}
           </div>
           <div className="text-[10px] text-[#8A8A8A]">Cada producto agregado se une al pedido de inmediato y queda ligado a su socio en Liquidación.</div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setAddItemOpen(false)}>Listo</Button>
+            <Button variant="outline" onClick={() => setAddItemOpen(false)} className="rounded-xl h-11 w-full sm:w-auto">Listo</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
