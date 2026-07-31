@@ -222,7 +222,10 @@ function Liquidacion() {
                     <div className="text-sm text-[#5E5E5E]">{s.units} unidades vendidas</div>
                   </div>
                   <div className="text-right">
-                    <div className="text-2xl font-bold" style={{ color: s.color }}>S/ {s.total.toFixed(2)}</div>
+                    <div className="text-2xl font-bold" style={{ color: s.color }}>S/ {(s.net_total ?? s.total).toFixed(2)}</div>
+                    {s.discount > 0 && (
+                      <div className="text-xs text-[#8A8A8A]">S/ {s.total.toFixed(2)} − S/ {s.discount.toFixed(2)} desc.</div>
+                    )}
                   </div>
                 </div>
 
