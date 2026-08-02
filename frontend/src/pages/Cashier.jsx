@@ -334,12 +334,12 @@ export default function Cashier() {
                   </>
                 )}
 
-                <div className="grid grid-cols-2 gap-3 mt-4 items-end">
+                <div className="mt-4 space-y-3">
                   <div>
                     <Label>Descuento (S/)</Label>
                     <Input type="number" step="0.1" value={discount} onChange={e => setDiscount(e.target.value)} data-testid="discount-input" className="h-11 rounded-xl" />
                   </div>
-                  <Button type="button" variant="outline" onClick={() => setAddItemOpen(true)} data-testid="open-waiter-panel-btn" className="h-11 rounded-xl border-2 border-dashed">
+                  <Button type="button" variant="outline" onClick={() => setAddItemOpen(true)} data-testid="open-waiter-panel-btn" className="w-full h-12 rounded-xl border-2 border-dashed justify-center">
                     <PlusCircle className="h-4 w-4 mr-2" />Agregar cargo / plato
                   </Button>
                 </div>
