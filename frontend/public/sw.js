@@ -2,7 +2,7 @@
  * Simple SW that makes the app installable and provides a basic offline fallback.
  * Strategy: network-first for API, cache-first for same-origin static assets.
  */
-const CACHE_VERSION = "pos-v1";
+const CACHE_VERSION = "pos-v2";
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 
 const PRECACHE = [
