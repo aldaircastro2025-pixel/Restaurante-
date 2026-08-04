@@ -839,7 +839,8 @@ td{{padding:4px 0;vertical-align:top}}
 .mod{{font-size:11px;color:#444;margin-left:10px}}
 .totals div{{display:flex;justify-content:space-between;font-size:13px}}
 .totals .t{{font-weight:700;font-size:15px;margin-top:6px}}
-@media print{{body{{margin:0}}.noprint{{display:none}}}}
+@page{{size:80mm auto;margin:0}}
+@media print{{body{{margin:0;max-width:80mm;width:80mm}}.noprint{{display:none}}}}
 </style></head><body>
 <h1>{os.environ.get('BUSINESS_NAME', 'Rich-Coffee')}</h1>
 <div class='center'>Ticket {o['code']}</div>
