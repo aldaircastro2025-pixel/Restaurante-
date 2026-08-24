@@ -830,17 +830,24 @@ async def ticket(oid: str):
 <!doctype html>
 <html><head><meta charset='utf-8'><title>Ticket {o['code']}</title>
 <style>
-body{{font-family:'Courier New',monospace;max-width:320px;margin:20px auto;color:#000;}}
-h1{{text-align:center;font-size:18px;margin:0 0 6px;}}
+*{{-webkit-print-color-adjust:exact;print-color-adjust:exact;box-sizing:border-box;}}
+html,body{{margin:0;padding:0;}}
+body{{font-family:'Courier New',monospace;font-weight:700;max-width:320px;margin:20px auto;color:#000;-webkit-font-smoothing:none;}}
+h1{{text-align:center;font-size:19px;margin:0 0 6px;font-weight:900;}}
 .center{{text-align:center}} .right{{text-align:right}}
-hr{{border:0;border-top:1px dashed #000;margin:8px 0}}
-table{{width:100%;border-collapse:collapse;font-size:12px}}
+hr{{border:0;border-top:2px dashed #000;margin:8px 0}}
+table{{width:100%;border-collapse:collapse;font-size:13px}}
 td{{padding:4px 0;vertical-align:top}}
-.mod{{font-size:11px;color:#444;margin-left:10px}}
-.totals div{{display:flex;justify-content:space-between;font-size:13px}}
-.totals .t{{font-weight:700;font-size:15px;margin-top:6px}}
+.mod{{font-size:12px;color:#000;margin-left:10px;font-weight:400}}
+.totals div{{display:flex;justify-content:space-between;font-size:14px}}
+.totals .t{{font-weight:900;font-size:16px;margin-top:6px}}
+/* altura de página ajustada al contenido: sin sobrante en blanco */
 @page{{size:80mm auto;margin:0}}
-@media print{{body{{margin:0;max-width:80mm;width:80mm}}.noprint{{display:none}}}}
+@media print{{
+  html,body{{margin:0!important;padding:0!important;height:auto!important;}}
+  body{{max-width:80mm;width:80mm;}}
+  .noprint{{display:none}}
+}}
 </style></head><body>
 <h1>{os.environ.get('BUSINESS_NAME', 'Rich-Coffee')}</h1>
 <div class='center'>Ticket {o['code']}</div>
