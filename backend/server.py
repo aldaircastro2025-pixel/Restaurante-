@@ -639,6 +639,13 @@ def _peru_day_start_utc(year: int, month: int, day: int) -> datetime:
     """Medianoche (00:00) de esa fecha en Perú, devuelta como datetime UTC."""
     return datetime(year, month, day, tzinfo=PERU_TZ).astimezone(timezone.utc)
 
+def _local_dt(iso_str: str) -> datetime:
+    """Convierte un created_at guardado en UTC a hora local de Perú para mostrar."""
+    dt = datetime.fromisoformat(iso_str)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(PERU_TZ)
+
 def _parse_dt(s: str) -> datetime:
     # Acepta ISO con o sin zona horaria. Si no trae zona, se asume hora de Perú
     # (no UTC) porque así es como el frontend construye los rangos de fecha.
@@ -832,7 +839,7 @@ async def ticket(oid: str):
 <style>
 *{{-webkit-print-color-adjust:exact;print-color-adjust:exact;box-sizing:border-box;}}
 html,body{{margin:0;padding:0;}}
-body{{font-family:'Consolas','Courier New',monospace;font-weight:700;max-width:320px;margin:20px auto;color:#000;-webkit-font-smoothing:none;}}
+body{{font-family:'Tahoma','Arial',sans-serif;font-weight:700;max-width:320px;margin:20px auto;color:#000;-webkit-font-smoothing:none;}}
 h1{{text-align:center;font-size:19px;margin:0 0 6px;font-weight:900;}}
 .center{{text-align:center}} .right{{text-align:right}}
 hr{{border:0;border-top:2px dashed #000;margin:8px 0}}
@@ -851,7 +858,7 @@ td{{padding:4px 0;vertical-align:top}}
 </style></head><body>
 <h1>{os.environ.get('BUSINESS_NAME', 'Rich-Coffee')}</h1>
 <div class='center'>Ticket {o['code']}</div>
-<div class='center'>{datetime.fromisoformat(o['created_at']).strftime('%d/%m/%Y %H:%M')}</div>
+<div class='center'>{_local_dt(o['created_at']).strftime('%d/%m/%Y %H:%M')}</div>
 <div class='center'>Mesa: {o['table_number'] or 'Para llevar'}</div>
 <div class='center'>Atendió: {o.get('created_by_name','')}</div>
 <hr/>
