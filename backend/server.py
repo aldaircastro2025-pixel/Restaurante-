@@ -839,7 +839,7 @@ async def ticket(oid: str):
 <style>
 *{{-webkit-print-color-adjust:exact;print-color-adjust:exact;box-sizing:border-box;}}
 html,body{{margin:0;padding:0;}}
-body{{font-family:'Tahoma','Arial',sans-serif;font-weight:700;max-width:320px;margin:20px auto;color:#000;-webkit-font-smoothing:none;}}
+body{{font-family:'Consolas','Courier New',monospace;font-weight:700;max-width:320px;margin:20px auto;color:#000;-webkit-font-smoothing:none;}}
 h1{{text-align:center;font-size:19px;margin:0 0 6px;font-weight:900;}}
 .center{{text-align:center}} .right{{text-align:right}}
 hr{{border:0;border-top:2px dashed #000;margin:8px 0}}
