@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="es">
     <head>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
@@ -21,5 +21,31 @@
     <body>
         <noscript>You need to enable JavaScript to run this app.</noscript>
         <div id="root"></div>
+        <script>
+          // Si en 8 segundos la app no dibujó nada (navegador muy viejo o archivos en caché dañados),
+          // mostrar un mensaje en lugar de dejar la pantalla en blanco.
+          (function () {
+            function show(msg) {
+              var r = document.getElementById("root");
+              if (!r || r.childNodes.length) return;
+              r.innerHTML = '<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;font-family:system-ui,sans-serif;background:#F9F8F6">' +
+                '<div style="max-width:420px;text-align:center"><div style="font-size:20px;font-weight:700;margin-bottom:8px">No se pudo abrir la aplicación</div>' +
+                '<p style="color:#5E5E5E;font-size:14px">' + msg + '</p>' +
+                '<button id="boot-reload" style="width:100%;height:48px;border:0;border-radius:12px;background:#D45D3C;color:#fff;font-weight:700;font-size:16px">Recargar</button></div></div>';
+              var b = document.getElementById("boot-reload");
+              if (b) b.onclick = function () {
+                var done = function () { location.reload(); };
+                try {
+                  var p = [];
+                  if (navigator.serviceWorker && navigator.serviceWorker.getRegistrations) p.push(navigator.serviceWorker.getRegistrations().then(function (rs) { return Promise.all(rs.map(function (x) { return x.unregister(); })); }));
+                  if (window.caches && caches.keys) p.push(caches.keys().then(function (ks) { return Promise.all(ks.map(function (k) { return caches.delete(k); })); }));
+                  Promise.all(p).then(done, done);
+                } catch (e) { done(); }
+              };
+            }
+            window.addEventListener("error", function () { setTimeout(function () { show("Actualiza el navegador del celular (Chrome o Samsung Internet) y vuelve a intentar."); }, 1500); });
+            setTimeout(function () { show("Actualiza el navegador del celular (Chrome o Samsung Internet) y vuelve a intentar."); }, 8000);
+          })();
+        </script>
     </body>
 </html>
