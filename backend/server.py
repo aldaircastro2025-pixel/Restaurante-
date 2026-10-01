@@ -19,9 +19,7 @@ from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, WebSock
 from fastapi.responses import HTMLResponse
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
-import html as html_lib
 from pydantic import BaseModel, Field
-from order_merge import merge_order_items, MergeError
 
 # -------- Setup --------
 mongo_url = os.environ['MONGO_URL']
@@ -150,13 +148,10 @@ class OrderItem(BaseModel):
 
 class OrderItemIn(BaseModel):
     product_id: str
-    qty: int = Field(ge=1, le=999)
+    qty: int
     modifier_ids: List[str] = []
     notes: str = ""
     added: bool = False  # True = item añadido a pedido ya enviado a cocina
-    # Posición que tenía este plato en el pedido guardado cuando el cliente lo cargó
-    # (None = plato nuevo). Permite conservar lo cobrado al editar el pedido.
-    source_index: Optional[int] = None
 
 class OrderCreate(BaseModel):
     table_number: Optional[int] = None
@@ -166,17 +161,15 @@ class OrderCreate(BaseModel):
 class OrderUpdate(BaseModel):
     items: Optional[List[OrderItemIn]] = None
     note: Optional[str] = None
-    # Cuántos platos conocía el cliente al cargar el pedido (None = cliente antiguo).
-    known_count: Optional[int] = None
 
 class PaymentIn(BaseModel):
     method: Literal["efectivo", "transferencia", "otro"]
-    amount: float = Field(ge=0)
-    tip: float = Field(default=0.0, ge=0)
+    amount: float
+    tip: float = 0.0
 
 class CloseIn(BaseModel):
-    discount: float = Field(default=0.0, ge=0)
-    extra_charge: float = Field(default=0.0, ge=0)
+    discount: float = 0.0
+    extra_charge: float = 0.0
     payments: List[PaymentIn]
 
 # -------- WebSocket Manager --------
@@ -195,7 +188,7 @@ class WSManager:
     async def broadcast(self, event: str, payload: dict):
         dead = []
         msg = json.dumps({"event": event, "payload": payload})
-        for ws in list(self.active):
+        for ws in self.active:
             try:
                 await ws.send_text(msg)
             except Exception:
@@ -211,22 +204,6 @@ def clean(doc: dict) -> dict:
         return doc
     doc.pop("_id", None)
     return doc
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-async def save_order(oid: str, prev: dict, update: dict):
-    """Guarda cambios solo si nadie más modificó el pedido desde que lo leímos.
-
-    Evita que dos personas (mozo y caja) se pisen y se pierda un cobro o un plato.
-    El cliente puede reintentar sin riesgo: el servidor vuelve a fusionar el estado.
-    """
-    res = await db.orders.update_one(
-        {"id": oid, "updated_at": prev.get("updated_at"), "paid": {"$ne": True}},
-        {"$set": update},
-    )
-    if res.matched_count == 0:
-        raise HTTPException(409, "El pedido cambió mientras lo guardabas. Intenta de nuevo.")
 
 async def compute_order_totals(items: List[OrderItemIn]) -> (List[dict], float):
     product_ids = list({i.product_id for i in items})
@@ -369,18 +346,15 @@ async def delete_product(pid: str, user=Depends(require_roles("admin"))):
 # ================= TABLES =================
 @api.get("/tables")
 async def list_tables(user=Depends(get_current_user)):
-    # Mesas 1..12 más "Para llevar" (virtual). Una sola consulta para todas.
-    open_orders = await db.orders.find(
-        {"table_number": {"$gte": 1, "$lte": 12}, "status": {"$in": ["pending", "preparing", "ready"]}, "paid": False},
-        {"_id": 0, "id": 1, "table_number": 1},
-    ).to_list(200)
-    by_table = {}
-    for o in open_orders:
-        by_table.setdefault(o["table_number"], o["id"])
-    return [
-        {"number": i, "status": "occupied" if i in by_table else "free", "order_id": by_table.get(i)}
-        for i in range(1, 13)
-    ]
+    # Tables are 1..12 (configurable) plus virtual "Para Llevar"
+    tables = []
+    for i in range(1, 13):
+        order = await db.orders.find_one(
+            {"table_number": i, "status": {"$in": ["pending", "preparing", "ready"]}, "paid": False},
+            {"_id": 0}
+        )
+        tables.append({"number": i, "status": "occupied" if order else "free", "order_id": order["id"] if order else None})
+    return tables
 
 # ================= ORDERS =================
 @api.post("/orders")
@@ -441,30 +415,15 @@ async def update_order(oid: str, body: OrderUpdate, user=Depends(require_roles("
         raise HTTPException(404, "Pedido no encontrado")
     if o["paid"]:
         raise HTTPException(400, "Pedido ya pagado")
-    upd = {"updated_at": _now_iso()}
+    upd = {"updated_at": datetime.now(timezone.utc).isoformat()}
     if body.items is not None:
-        if not body.items:
-            raise HTTPException(400, "El pedido debe tener al menos un plato. Para quitarlo todo, anula el pedido.")
-        new_items, _ = await compute_order_totals(body.items)
-        try:
-            items = merge_order_items(
-                o.get("items", []),
-                new_items,
-                [i.source_index for i in body.items],
-                body.known_count,
-            )
-        except MergeError as e:
-            raise HTTPException(400, str(e))
-        subtotal = round(sum(i["line_total"] for i in items), 2)
+        items, total = await compute_order_totals(body.items)
         upd["items"] = items
-        upd["subtotal"] = subtotal
-        upd["total"] = round(subtotal - o.get("discount", 0.0) + o.get("extra_charge", 0.0), 2)
-        # Si el pedido ya estaba "listo" y se añadió algo, vuelve a cocina.
-        if o.get("status") == "ready" and not all(it.get("done") for it in items):
-            upd["status"] = "preparing" if any(it.get("done") for it in items) else "pending"
+        upd["subtotal"] = total
+        upd["total"] = round(total - o.get("discount", 0.0) + o.get("extra_charge", 0.0), 2)
     if body.note is not None:
         upd["note"] = body.note
-    await save_order(oid, o, upd)
+    await db.orders.update_one({"id": oid}, {"$set": upd})
     o2 = await db.orders.find_one({"id": oid}, {"_id": 0})
     await manager.broadcast("order.update", o2)
     return o2
@@ -520,8 +479,7 @@ async def close_order(oid: str, body: CloseIn, user=Depends(require_roles("cashi
         "closed_at": datetime.now(timezone.utc).isoformat(),
         "closed_by": user["name"],
     }
-    upd["updated_at"] = _now_iso()
-    await save_order(oid, o, upd)
+    await db.orders.update_one({"id": oid}, {"$set": upd})
     o2 = await db.orders.find_one({"id": oid}, {"_id": 0})
     await manager.broadcast("order.closed", o2)
     return o2
@@ -554,10 +512,7 @@ async def toggle_item(oid: str, idx: int, body: ItemToggleIn, user=Depends(get_c
     if idx < 0 or idx >= len(o["items"]):
         raise HTTPException(400, "Índice inválido")
     o["items"][idx][body.field] = body.value
-    if body.field == "paid":
-        # Mantener coherente el contador de unidades cobradas con la marca "pagado".
-        o["items"][idx]["paid_qty"] = o["items"][idx].get("qty", 1) if body.value else 0
-    update = {"items": o["items"], "updated_at": _now_iso()}
+    update = {"items": o["items"], "updated_at": datetime.now(timezone.utc).isoformat()}
     # Auto-advance order status
     if body.field == "done" and all(it.get("done") for it in o["items"]):
         update["status"] = "ready"
@@ -572,7 +527,7 @@ async def toggle_item(oid: str, idx: int, body: ItemToggleIn, user=Depends(get_c
         # Sum existing partial payments for total
         total_partial = sum(p.get("amount", 0) for p in o.get("payments", []))
         update["total"] = round(total_partial, 2)
-    await save_order(oid, o, update)
+    await db.orders.update_one({"id": oid}, {"$set": update})
     o2 = await db.orders.find_one({"id": oid}, {"_id": 0})
     await manager.broadcast("order.update", o2)
     if update.get("paid"):
@@ -634,7 +589,7 @@ async def partial_payment(oid: str, body: PartialPaymentIn, user=Depends(require
     update = {
         "items": items,
         "payments": payments,
-        "updated_at": _now_iso(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     if all(it.get("paid") for it in items):
         update["paid"] = True
@@ -642,7 +597,7 @@ async def partial_payment(oid: str, body: PartialPaymentIn, user=Depends(require
         update["closed_at"] = datetime.now(timezone.utc).isoformat()
         update["closed_by"] = user["name"]
         update["total"] = round(sum(p["amount"] for p in payments), 2)
-    await save_order(oid, o, update)
+    await db.orders.update_one({"id": oid}, {"$set": update})
     o2 = await db.orders.find_one({"id": oid}, {"_id": 0})
     await manager.broadcast("order.update", o2)
     if update.get("paid"):
@@ -667,11 +622,9 @@ async def add_item(oid: str, body: OrderItemIn, user=Depends(require_roles("wait
         "items": items,
         "subtotal": subtotal,
         "total": total,
-        "updated_at": _now_iso(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }
-    if o.get("status") == "ready":
-        update["status"] = "preparing" if any(it.get("done") for it in o["items"]) else "pending"
-    await save_order(oid, o, update)
+    await db.orders.update_one({"id": oid}, {"$set": update})
     o2 = await db.orders.find_one({"id": oid}, {"_id": 0})
     await manager.broadcast("order.update", o2)
     return o2
@@ -869,11 +822,10 @@ async def ticket(oid: str):
         raise HTTPException(404, "Pedido no encontrado")
     rows = ""
     for it in o["items"]:
-        esc = html_lib.escape
-        mods = "".join(f"<div class='mod'>+ {esc(str(m['name']))}{(' (S/ '+str(m['price_delta'])+')') if m['price_delta'] else ''}</div>" for m in it["modifiers"])
+        mods = "".join(f"<div class='mod'>+ {m['name']}{(' (S/ '+str(m['price_delta'])+')') if m['price_delta'] else ''}</div>" for m in it["modifiers"])
         rows += f"""
         <tr>
-          <td>{it['qty']}x {esc(str(it['name']))}{mods}{('<div class=mod>'+esc(str(it['notes']))+'</div>') if it.get('notes') else ''}</td>
+          <td>{it['qty']}x {it['name']}{mods}{('<div class=mod>'+it['notes']+'</div>') if it.get('notes') else ''}</td>
           <td class='right'>S/ {it['line_total']:.2f}</td>
         </tr>"""
     pay_rows = "".join(
@@ -904,11 +856,11 @@ td{{padding:4px 0;vertical-align:top}}
   .noprint{{display:none}}
 }}
 </style></head><body>
-<h1>{html_lib.escape(os.environ.get('BUSINESS_NAME', 'Rich-Coffee'))}</h1>
+<h1>{os.environ.get('BUSINESS_NAME', 'Rich-Coffee')}</h1>
 <div class='center'>Ticket {o['code']}</div>
 <div class='center'>{_local_dt(o['created_at']).strftime('%d/%m/%Y %H:%M')}</div>
 <div class='center'>Mesa: {o['table_number'] or 'Para llevar'}</div>
-<div class='center'>Atendió: {html_lib.escape(str(o.get('created_by_name','')))}</div>
+<div class='center'>Atendió: {o.get('created_by_name','')}</div>
 <hr/>
 <table>{rows}</table>
 <hr/>
@@ -934,9 +886,7 @@ async def ws_endpoint(ws: WebSocket):
     await manager.connect(ws)
     try:
         while True:
-            msg = await ws.receive_text()
-            if "ping" in msg:
-                await ws.send_text('{"event": "pong"}')  # keepalive
+            await ws.receive_text()  # keepalive / ignore
     except WebSocketDisconnect:
         manager.disconnect(ws)
     except Exception:
@@ -1015,9 +965,6 @@ async def seed_data():
     await db.users.create_index("email", unique=True)
     await db.products.create_index("id", unique=True)
     await db.orders.create_index("id", unique=True)
-    await db.orders.create_index([("paid", 1), ("status", 1)])
-    await db.orders.create_index([("paid", 1), ("closed_at", 1)])
-    await db.orders.create_index("table_number")
 
     # Historical demo orders removed
 
@@ -1107,11 +1054,10 @@ async def on_start():
     logger.info("POS backend started. Seed complete.")
 
 app.include_router(api)
-_cors_origins = [o.strip() for o in os.environ.get('CORS_ORIGINS', '*').split(',') if o.strip()] or ['*']
 app.add_middleware(
     CORSMiddleware,
-    allow_credentials="*" not in _cors_origins,
-    allow_origins=_cors_origins,
+    allow_credentials=True,
+    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
     allow_methods=["*"],
     allow_headers=["*"],
 )
