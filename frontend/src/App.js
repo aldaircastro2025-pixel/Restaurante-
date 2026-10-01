@@ -1,14 +1,16 @@
-import React from "react";
+import React, { Suspense, lazy } from "react";
 import "@/App.css";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 import { Toaster } from "sonner";
 import Login from "@/pages/Login";
-import AdminDashboard from "@/pages/AdminDashboard";
-import POSOrder from "@/pages/POSOrder";
-import KDS from "@/pages/KDS";
-import Cashier from "@/pages/Cashier";
 import RoleGuard from "@/components/RoleGuard";
+const AdminDashboard = lazy(() => import("@/pages/AdminDashboard"));
+const POSOrder = lazy(() => import("@/pages/POSOrder"));
+const KDS = lazy(() => import("@/pages/KDS"));
+const Cashier = lazy(() => import("@/pages/Cashier"));
+
+const Loading = () => <div className="p-10 text-center text-[#8A8A8A]">Cargando...</div>;
 
 function HomeRedirect() {
   const { user, loading } = useAuth();
@@ -24,6 +26,7 @@ function App() {
       <AuthProvider>
         <BrowserRouter>
           <Toaster position="top-right" richColors />
+          <Suspense fallback={<Loading />}>
           <Routes>
             <Route path="/login" element={<Login />} />
             <Route path="/admin/*" element={<RoleGuard roles={["admin"]}><AdminDashboard /></RoleGuard>} />
@@ -33,6 +36,7 @@ function App() {
             <Route path="/" element={<HomeRedirect />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
+          </Suspense>
         </BrowserRouter>
       </AuthProvider>
     </div>
