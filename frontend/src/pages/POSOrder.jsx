@@ -10,6 +10,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
 import { Minus, Plus, Send, Trash2, ShoppingBag, CircleCheck, PlusCircle, Menu, Search, ChevronRight } from "lucide-react";
 import { useOrdersWS } from "@/lib/ws";
+import { uid } from "@/lib/uid";
 
 export default function POSOrder() {
   const [cats, setCats] = useState([]);
@@ -20,19 +21,29 @@ export default function POSOrder() {
   const [table, setTable] = useState(null);
   const [cart, setCart] = useState([]); // {uid, product, qty, modifier_ids, notes, _existing, _added}
   const [orderId, setOrderId] = useState(null);
+  const [knownCount, setKnownCount] = useState(null); // platos que tenía el pedido al cargarlo
+  const orderIdRef = React.useRef(null);
+  orderIdRef.current = orderId;
   const [modDlg, setModDlg] = useState(null);
   const [note, setNote] = useState("");
   const [deleteConfirm, setDeleteConfirm] = useState(null); // {idx, name}
   const [search, setSearch] = useState("");
   const [catSheetOpen, setCatSheetOpen] = useState(false);
+  const [sending, setSending] = useState(false); // evita doble envío por doble toque
   const [takeawayList, setTakeawayList] = useState([]);
   const [takeawaySheetOpen, setTakeawaySheetOpen] = useState(false);
 
   const loadAll = async () => {
-    const [c, p, m, t] = await Promise.all([api.get("/categories"), api.get("/products"), api.get("/modifiers"), api.get("/tables")]);
-    setCats(c.data); setProducts(p.data); setMods(m.data); setTables(t.data);
-    if (!activeCat && c.data[0]) setActiveCat(c.data[0].id);
-    return { products: p.data, tables: t.data };
+    try {
+      const [c, p, m, t] = await Promise.all([api.get("/categories"), api.get("/products"), api.get("/modifiers"), api.get("/tables")]);
+      setCats(c.data); setProducts(p.data); setMods(m.data); setTables(t.data);
+      if (c.data[0]) setActiveCat(prev => prev || c.data[0].id);
+      return { products: p.data, tables: t.data };
+    } catch (err) {
+      console.warn("No se pudo cargar el catálogo:", err);
+      toast.error("No se pudo cargar el menú. Revisa tu conexión.");
+      return null;
+    }
   };
   useEffect(()=>{ loadAll(); }, []);
 
@@ -40,18 +51,27 @@ export default function POSOrder() {
     if (["order.new","order.closed","order.cancel","order.update"].includes(e.event)) {
       api.get("/tables").then(r=>setTables(r.data));
     }
+    // Si el pedido abierto cambió en caja (cobros), reflejar lo ya cobrado en cada plato
+    if (e.event === "order.update" && e.payload?.id && e.payload.id === orderIdRef.current) {
+      const serverItems = e.payload.items || [];
+      setCart(prev => prev.map(c => {
+        if (c._src === undefined || c._src === null) return c;
+        const srv = serverItems[c._src];
+        return srv ? { ...c, _paidQty: srv.paid_qty || 0 } : c;
+      }));
+    }
     // Si el pedido actualmente abierto fue cerrado o cancelado, limpiar pantalla
     if (e.event === "order.closed" || e.event === "order.cancel") {
       const closedId = e.payload?.id;
       setOrderId(prev => {
         if (prev === closedId) {
-          setCart([]); setTable(null); setNote("");
+          setCart([]); setTable(null); setNote(""); setKnownCount(null);
           return null;
         }
         return prev;
       });
     }
-  });
+  }, () => { api.get("/tables").then(r => setTables(r.data)).catch(() => {}); });
 
   const modMap = useMemo(() => Object.fromEntries(mods.map(m=>[m.id,m])), [mods]);
   const filtered = products.filter(p => {
@@ -65,13 +85,13 @@ export default function POSOrder() {
     if (p.modifier_ids && p.modifier_ids.length) {
       setModDlg({ product: p, qty: 1, modifier_ids: [], notes: "" });
     } else {
-      setCart(prev => [...prev, { uid: crypto.randomUUID(), product: p, qty: 1, modifier_ids: [], notes: "", _added: !!orderId }]);
+      setCart(prev => [...prev, { uid: uid(), product: p, qty: 1, modifier_ids: [], notes: "", _added: !!orderId }]);
     }
   };
 
   const confirmModDlg = () => {
     setCart(prev => [...prev, {
-      uid: crypto.randomUUID(),
+      uid: uid(),
       product: modDlg.product,
       qty: modDlg.qty,
       modifier_ids: modDlg.modifier_ids,
@@ -81,10 +101,22 @@ export default function POSOrder() {
     setModDlg(null);
   };
 
-  const updateQty = (idx, d) => setCart(prev => prev.map((c,i)=> i===idx ? {...c, qty: Math.max(1, c.qty+d)} : c));
+  const updateQty = (idx, d) => {
+    const item = cart[idx];
+    const min = Math.max(1, item?._paidQty || 0);
+    if (d < 0 && item && item.qty + d < min) {
+      if (item._paidQty > 0) toast.error(`Ya se cobraron ${item._paidQty} de "${item.product.name}"; no se puede bajar de esa cantidad.`);
+      return;
+    }
+    setCart(prev => prev.map((c,i)=> i===idx ? {...c, qty: Math.max(min, c.qty+d)} : c));
+  };
 
   const removeItem = (idx) => {
     const item = cart[idx];
+    if (item._paidQty > 0) {
+      toast.error(`"${item.product.name}" ya tiene unidades cobradas y no se puede eliminar.`);
+      return;
+    }
     if (item._existing) {
       setDeleteConfirm({ idx, name: item.product.name });
     } else {
@@ -105,21 +137,25 @@ export default function POSOrder() {
   const loadOrderIntoCart = (o, prodList) => {
     if (o.paid) return false;
     setOrderId(o.id);
+    setKnownCount(o.items.length);
     setNote(o.note || "");
-    setCart(o.items.map(it => ({
-      uid: crypto.randomUUID(),
+    setCart(o.items.map((it, srcIdx) => ({
+      uid: uid(),
       product: prodList.find(p=>p.id===it.product_id) || { id: it.product_id, name: it.name, price: it.unit_price, modifier_ids: [] },
       qty: it.qty,
       modifier_ids: it.modifiers.map(m=>m.id),
       notes: it.notes || "",
       _existing: true,
       _added: false,
+      _src: srcIdx,                 // posición en el pedido guardado
+      _paidQty: it.paid_qty || 0,   // unidades ya cobradas en caja
+      _wasAdded: !!it.added,
     })));
     return true;
   };
 
   const selectTable = async (n, overrideData = {}) => {
-    setTable(n); setCart([]); setOrderId(null); setNote("");
+    setTable(n); setCart([]); setOrderId(null); setNote(""); setKnownCount(null);
     // Usar datos frescos si se pasan (evita bug de timing con estado de React)
     const prodList = overrideData.products || products;
     const tableList = overrideData.tables || tables;
@@ -152,7 +188,7 @@ export default function POSOrder() {
   };
 
   const startNewTakeaway = () => {
-    setTable(null); setCart([]); setOrderId(null); setNote("");
+    setTable(null); setCart([]); setOrderId(null); setNote(""); setKnownCount(null);
     setTakeawaySheetOpen(false);
   };
 
@@ -164,26 +200,32 @@ export default function POSOrder() {
 
   const send = async () => {
     if (!cart.length) return toast.error("Agrega productos al pedido");
+    if (sending) return;
     const items = cart.map(c => ({
       product_id: c.product.id,
       qty: c.qty,
       modifier_ids: c.modifier_ids,
       notes: c.notes,
-      added: !!c._added,
+      added: !!(c._added || c._wasAdded),
+      // Posición original del plato: así el servidor conserva lo ya cobrado / preparado.
+      source_index: c._src ?? null,
     }));
-    const body = { table_number: table, note, items };
+    setSending(true);
     try {
       if (orderId) {
-        await api.patch(`/orders/${orderId}`, body);
+        await api.patch(`/orders/${orderId}`, { note, items, known_count: knownCount });
         toast.success("Pedido actualizado ✓");
       } else {
-        const { data } = await api.post("/orders", body);
+        const { data } = await api.post("/orders", { table_number: table, note, items });
         setOrderId(data.id);
         toast.success(`Pedido ${data.code} enviado a cocina`);
       }
-      setCart([]); setTable(null); setOrderId(null); setNote("");
+      setCart([]); setTable(null); setOrderId(null); setNote(""); setKnownCount(null);
       loadAll();
-    } catch (e) { toast.error(e?.response?.data?.detail || "Error al enviar"); }
+    } catch (e) {
+      const d = e?.response?.data?.detail;
+      toast.error(typeof d === "string" ? d : "Error al enviar. Revisa tu conexión e intenta de nuevo.");
+    } finally { setSending(false); }
   };
 
   const printTicket = () => {
@@ -205,6 +247,11 @@ export default function POSOrder() {
             {c._added && (
               <span className="flex-shrink-0 text-[9px] uppercase tracking-wider bg-[#27AE60] text-white px-1.5 py-0.5 rounded-full font-bold flex items-center gap-1">
                 <PlusCircle className="h-2.5 w-2.5"/> Añadido
+              </span>
+            )}
+            {c._paidQty > 0 && (
+              <span className="flex-shrink-0 text-[9px] uppercase tracking-wider bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded-full font-bold">
+                Cobrado {c._paidQty}/{c.qty}
               </span>
             )}
           </div>
@@ -258,7 +305,7 @@ export default function POSOrder() {
           <span className="text-[#5E5E5E]">Total</span>
           <span className="heading font-bold text-2xl text-[#D45D3C]" data-testid="order-total">S/ {total.toFixed(2)}</span>
         </div>
-        <Button onClick={send} data-testid="send-order-btn" disabled={!cart.length} className="w-full h-14 text-base bg-[#D45D3C] hover:bg-[#C04F30] rounded-xl">
+        <Button onClick={send} data-testid="send-order-btn" disabled={!cart.length || sending} className="w-full h-14 text-base bg-[#D45D3C] hover:bg-[#C04F30] rounded-xl">
           <Send className="h-4 w-4 mr-2"/>{orderId ? "Actualizar pedido" : "Enviar a cocina"}
         </Button>
         {orderId && <Button onClick={printTicket} variant="outline" className="w-full h-11 rounded-xl">Imprimir ticket</Button>}
@@ -375,7 +422,7 @@ export default function POSOrder() {
         {/* Tab Pedido */}
         {mobileTab==="pedido" && (
           <div className="h-full flex flex-col overflow-hidden bg-white">
-            <CartContent/>
+            {CartContent()}
           </div>
         )}
       </div>
@@ -438,7 +485,7 @@ export default function POSOrder() {
           </div>
         </section>
         <aside className="col-span-3 card-surface flex flex-col overflow-hidden">
-          <CartContent/>
+          {CartContent()}
         </aside>
       </div>
 
