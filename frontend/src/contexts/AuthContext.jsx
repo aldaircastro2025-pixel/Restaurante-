@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { safeStorage } from "@/lib/storage";
 
 const AuthCtx = createContext(null);
 
@@ -8,23 +9,23 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const t = localStorage.getItem("pos_token");
+    const t = safeStorage.get("pos_token");
     if (!t) { setUser(false); setLoading(false); return; }
     api.get("/auth/me")
       .then((r) => setUser(r.data))
-      .catch(() => { localStorage.removeItem("pos_token"); setUser(false); })
+      .catch(() => { safeStorage.remove("pos_token"); setUser(false); })
       .finally(() => setLoading(false));
   }, []);
 
   const login = async (email, password) => {
     const { data } = await api.post("/auth/login", { email, password });
-    localStorage.setItem("pos_token", data.token);
+    safeStorage.set("pos_token", data.token);
     setUser(data.user);
     return data.user;
   };
 
   const logout = () => {
-    localStorage.removeItem("pos_token");
+    safeStorage.remove("pos_token");
     setUser(false);
   };
 
