@@ -316,7 +316,7 @@ export default function Cashier() {
                       <div key={`p-${it._idx}`} data-testid={`cashier-item-${it._idx}`}
                         className={`flex items-start gap-3 p-2 rounded-lg transition-colors ${qtySel > 0 ? "bg-[#F3E8E0]" : "hover:bg-[#F9F8F6]"}`}>
                         <div className="flex-1">
-                          <div className="font-semibold">{it._pendingQty}x {it.name}{it._pendingQty !== it.qty ? <span className="text-xs text-[#8A8A8A] font-normal"> (de {it.qty})</span> : null}</div>
+                          <div className="font-semibold"><span>{`${it._pendingQty}x ${it.name}`}</span>{it._pendingQty !== it.qty ? <span className="text-xs text-[#8A8A8A] font-normal">{` (de ${it.qty})`}</span> : null}</div>
                           {it.modifiers.map((m, j) => (<div key={`${m.id}-${j}`} className="text-xs text-[#8A8A8A] ml-1">+ {m.name}{m.price_delta ? ` (S/ ${m.price_delta.toFixed(2)})` : ""}</div>))}
                           {it.notes && <div className="text-xs italic text-[#8A8A8A] ml-1">"{it.notes}"</div>}
                           <div className="text-xs text-[#8A8A8A] mt-1">S/ {up.toFixed(2)} c/u</div>
@@ -372,8 +372,8 @@ export default function Cashier() {
               <div className="p-4 border-t border-[#E5E0D8] bg-[#F9F8F6] space-y-2">
                 {selectedCount > 0 && (
                   <div className="flex justify-between items-baseline bg-[#F3E8E0] rounded-xl p-3">
-                    <span className="text-sm font-semibold">{selectedCount} unidad{selectedCount > 1 ? "es" : ""} seleccionada{selectedCount > 1 ? "s" : ""}</span>
-                    <span className="heading font-bold text-xl text-[#D45D3C]" data-testid="selected-subtotal">S/ {selectedSubtotal.toFixed(2)}</span>
+                    <span className="text-sm font-semibold">{`${selectedCount} ${selectedCount > 1 ? "unidades seleccionadas" : "unidad seleccionada"}`}</span>
+                    <span className="heading font-bold text-xl text-[#D45D3C]" data-testid="selected-subtotal">{`S/ ${selectedSubtotal.toFixed(2)}`}</span>
                   </div>
                 )}
                 <div className="flex justify-between text-sm"><span className="text-[#5E5E5E]">Subtotal pendiente</span><span>S/ {pendingSubtotal.toFixed(2)}</span></div>
