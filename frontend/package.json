@@ -65,7 +65,11 @@
     "production": [
       ">0.2%",
       "not dead",
-      "not op_mini all"
+      "not op_mini all",
+      "chrome >= 64",
+      "android >= 6",
+      "samsung >= 8",
+      "ios_saf >= 12"
     ],
     "development": [
       "last 1 chrome version",
