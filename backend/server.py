@@ -228,6 +228,13 @@ async def save_order(oid: str, prev: dict, update: dict):
     if res.matched_count == 0:
         raise HTTPException(409, "El pedido cambió mientras lo guardabas. Intenta de nuevo.")
 
+def _sale_total(items: list, discount: float, extra: float) -> float:
+    """Total de la venta calculado SIEMPRE desde los platos (no desde los pagos).
+    Así el total nunca puede diverger de la suma del detalle, aunque los pagos
+    incluyan propina, vuelto o se registren en varias partes."""
+    subtotal = round(sum(i.get("line_total", 0) for i in items), 2)
+    return round(subtotal - (discount or 0.0) + (extra or 0.0), 2)
+
 async def compute_order_totals(items: List[OrderItemIn]) -> (List[dict], float):
     product_ids = list({i.product_id for i in items})
     prods = await db.products.find({"id": {"$in": product_ids}}, {"_id": 0}).to_list(1000)
@@ -513,7 +520,8 @@ async def close_order(oid: str, body: CloseIn, user=Depends(require_roles("cashi
         "items": items,
         "discount": round(o.get("discount", 0.0) + body.discount, 2),
         "extra_charge": round(o.get("extra_charge", 0.0) + body.extra_charge, 2),
-        "total": round(sum(p.get("amount", 0) for p in prior_payments) + total, 2),
+        "subtotal": round(sum(i.get("line_total", 0) for i in items), 2),
+        "total": _sale_total(items, round(o.get("discount", 0.0) + body.discount, 2), round(o.get("extra_charge", 0.0) + body.extra_charge, 2)),
         "payments": prior_payments + [p.model_dump() for p in body.payments],
         "paid": True,
         "status": "closed",
@@ -570,8 +578,7 @@ async def toggle_item(oid: str, idx: int, body: ItemToggleIn, user=Depends(get_c
         update["closed_at"] = datetime.now(timezone.utc).isoformat()
         update["closed_by"] = user["name"]
         # Sum existing partial payments for total
-        total_partial = sum(p.get("amount", 0) for p in o.get("payments", []))
-        update["total"] = round(total_partial, 2)
+        update["total"] = _sale_total(o["items"], o.get("discount", 0.0), o.get("extra_charge", 0.0))
     await save_order(oid, o, update)
     o2 = await db.orders.find_one({"id": oid}, {"_id": 0})
     await manager.broadcast("order.update", o2)
@@ -641,7 +648,7 @@ async def partial_payment(oid: str, body: PartialPaymentIn, user=Depends(require
         update["status"] = "closed"
         update["closed_at"] = datetime.now(timezone.utc).isoformat()
         update["closed_by"] = user["name"]
-        update["total"] = round(sum(p["amount"] for p in payments), 2)
+        update["total"] = _sale_total(items, o.get("discount", 0.0), o.get("extra_charge", 0.0))
     await save_order(oid, o, update)
     o2 = await db.orders.find_one({"id": oid}, {"_id": 0})
     await manager.broadcast("order.update", o2)
