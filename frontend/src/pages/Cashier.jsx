@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { api, API } from "@/lib/api";
 import AppShell from "@/components/AppShell";
 import { useOrdersWS } from "@/lib/ws";
+import { uid } from "@/lib/uid";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -18,7 +19,7 @@ export default function Cashier() {
   const [extra, setExtra] = useState(0);
   const [selectedQty, setSelectedQty] = useState({}); // { idx: unitsSelected } for split-by-quantity
   const [qtyDlg, setQtyDlg] = useState(null); // { idx, value } mini dialog to type an exact quantity
-  const [payments, setPayments] = useState([{ uid: crypto.randomUUID(), method: "efectivo", amount: 0, tip: 0 }]);
+  const [payments, setPayments] = useState([{ uid: uid(), method: "efectivo", amount: 0, tip: 0 }]);
   const [payDlgOpen, setPayDlgOpen] = useState(false);
   const [payMode, setPayMode] = useState("full"); // "full" or "partial"
   const [tipPercent, setTipPercent] = useState(0); // 0 = no tip, or 10/15/20 preset, or -1 = custom
@@ -30,8 +31,14 @@ export default function Cashier() {
   const [addingProductId, setAddingProductId] = useState(null);
 
   const load = async () => {
-    const { data } = await api.get("/orders?paid=false");
-    setOrders(data);
+    try {
+      const { data } = await api.get("/orders?paid=false");
+      setOrders(data);
+      // Mantener el pedido abierto al día (p. ej. al volver a abrir la app).
+      setSel(prev => (prev ? (data.find(o => o.id === prev.id) || null) : prev));
+    } catch (e) {
+      console.warn("No se pudieron cargar los pedidos:", e);
+    }
   };
   useEffect(() => { load(); }, []);
 
@@ -48,13 +55,13 @@ export default function Cashier() {
     }
     if (e.event === "order.closed") { setOrders(p => p.filter(o => o.id !== e.payload.id)); if (sel?.id === e.payload.id) setSel(null); }
     if (e.event === "order.cancel") setOrders(p => p.filter(o => o.id !== e.payload.id));
-  });
+  }, () => load());
 
   const open = (o) => {
     setSel(o);
     setDiscount(0); setExtra(0);
     setSelectedQty({});
-    setPayments([{ uid: crypto.randomUUID(), method: "efectivo", amount: 0, tip: 0 }]);
+    setPayments([{ uid: uid(), method: "efectivo", amount: 0, tip: 0 }]);
   };
 
   // Items pendientes (con unidades por cobrar > 0) y ya cobrados (con unidades pagadas > 0).
@@ -65,6 +72,22 @@ export default function Cashier() {
   const paidItems = useMemo(() => sel ? sel.items
     .map((it, i) => ({ ...it, _idx: i }))
     .filter(it => (it.paid_qty || 0) > 0) : [], [sel]);
+  // Si el pedido cambió por detrás (otro cobro, un plato añadido), no dejar seleccionadas
+  // más unidades de las que realmente quedan por cobrar.
+  useEffect(() => {
+    setSelectedQty(prev => {
+      let changed = false;
+      const next = {};
+      Object.entries(prev).forEach(([idx, q]) => {
+        const it = sel?.items?.[Number(idx)];
+        const max = it ? it.qty - (it.paid_qty || 0) : 0;
+        const clamped = Math.min(q, max);
+        if (clamped !== q) changed = true;
+        if (clamped > 0) next[idx] = clamped; else changed = true;
+      });
+      return changed ? next : prev;
+    });
+  }, [sel]);
   const unitPrice = (it) => it.qty ? it.line_total / it.qty : 0;
   const pendingSubtotal = pendingItems.reduce((s, it) => s + unitPrice(it) * it._pendingQty, 0);
   const selectedCount = Object.values(selectedQty).reduce((s, q) => s + (q || 0), 0);
@@ -96,16 +119,16 @@ export default function Cashier() {
   const selectAll = () => setSelectedQty(Object.fromEntries(pendingItems.map(it => [it._idx, it._pendingQty])));
   const clearSel = () => setSelectedQty({});
 
-  const addPay = () => setPayments(p => [...p, { uid: crypto.randomUUID(), method: "efectivo", amount: remaining, tip: 0 }]);
+  const addPay = () => setPayments(p => [...p, { uid: uid(), method: "efectivo", amount: remaining, tip: 0 }]);
   const delPay = (i) => setPayments(p => p.filter((_, x) => x !== i));
   const upd = (i, k, v) => setPayments(p => p.map((x, xi) => xi === i ? { ...x, [k]: v } : x));
 
-  const openFullPay = () => { setPayMode("full"); setTipPercent(0); setPayments([{ uid: crypto.randomUUID(), method: "efectivo", amount: totalFull, tip: 0 }]); setPayDlgOpen(true); };
+  const openFullPay = () => { setPayMode("full"); setTipPercent(0); setPayments([{ uid: uid(), method: "efectivo", amount: totalFull, tip: 0 }]); setPayDlgOpen(true); };
   const openPartialPay = () => {
     if (!selectedCount) return toast.error("Selecciona al menos una unidad para cobrar");
     setPayMode("partial");
     setTipPercent(0);
-    setPayments([{ uid: crypto.randomUUID(), method: "efectivo", amount: selectedSubtotal, tip: 0 }]);
+    setPayments([{ uid: uid(), method: "efectivo", amount: selectedSubtotal, tip: 0 }]);
     setPayDlgOpen(true);
   };
 
