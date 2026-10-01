@@ -24,8 +24,12 @@ export default function KDS() {
   const [, tick] = useState(0);
 
   const load = async () => {
-    const { data } = await api.get("/orders?status=pending,preparing,ready&paid=false");
-    setOrders(data.filter(o => !o.paid));
+    try {
+      const { data } = await api.get("/orders?status=pending,preparing,ready&paid=false");
+      setOrders(data.filter(o => !o.paid));
+    } catch (e) {
+      console.warn("No se pudieron cargar los pedidos de cocina:", e);
+    }
   };
   useEffect(()=>{ load(); const i = setInterval(()=>tick(t=>t+1), 30000); return ()=>clearInterval(i); }, []);
 
@@ -35,7 +39,7 @@ export default function KDS() {
       setOrders(prev => prev.map(o => o.id === e.payload.id ? e.payload : o).filter(o => ["pending","preparing","ready"].includes(o.status) && !o.paid));
     }
     else if (e.event === "order.cancel") setOrders(prev => prev.filter(o => o.id !== e.payload.id));
-  });
+  }, () => load());
 
   const grouped = useMemo(() => {
     const g = { pending: [], preparing: [], ready: [] };
@@ -44,7 +48,11 @@ export default function KDS() {
   }, [orders]);
 
   const setStatus = async (id, status) => {
-    await api.patch(`/orders/${id}/status?status=${status}`);
+    try {
+      await api.patch(`/orders/${id}/status?status=${status}`);
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "No se pudo cambiar el estado del pedido");
+    }
   };
 
   const toggleItemDone = async (oid, idx, value) => {
